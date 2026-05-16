@@ -1,6 +1,6 @@
 name: BananoEconomy
 version: ${project.version}
-main: banano.bananominecraft.bananoeconomy.Main
+main: banano.bananominecraft.bananoeconomy.BananoEconomyMain
 api-version: 1.16
 authors: [Kirby]
 description: A Banano Tipbot for Minecraft
@@ -26,6 +26,11 @@ commands:
   balance:
     description: Displays your balance
     aliases: [bal]
+
+  history:
+    description: Displays your transaction history
+    usage: /<command> [last X transactions]
+    aliases: [hist,transactions,trans]
 
   bc:
     aliases: [bananoeconomy,bananocraft,be]

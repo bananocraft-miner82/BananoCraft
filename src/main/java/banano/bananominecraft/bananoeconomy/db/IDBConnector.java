@@ -8,8 +8,9 @@ import org.bukkit.entity.Player;
 import java.util.List;
 import java.util.UUID;
 
-public interface IDBConnector {
-
+public interface IDBConnector
+{
+    PlayerRecord getPlayerRecord(UUID playerId);
     PlayerRecord getPlayerRecord(Player player);
     PlayerRecord getOfflinePlayerRecord(OfflinePlayer player);
     boolean updatePlayerRecord(PlayerRecord playerRecord);
@@ -29,5 +30,4 @@ public interface IDBConnector {
     List<PlayerRecord> getUnfrozenPlayers();
 
     void close();
-
 }
