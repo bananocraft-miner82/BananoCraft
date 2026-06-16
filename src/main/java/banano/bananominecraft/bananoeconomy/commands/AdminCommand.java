@@ -98,9 +98,11 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
     private final RPC rpc;
     private final BananoWebSocket webSocket;
     private final TaskTracker taskTracker;
+    private final MessageGenerator messageGenerator;
 
     public AdminCommand(Plugin plugin, ConfigEngine configEngine, EconomyFuncs economyFuncs,
-                        IDBConnector db, RPC rpc, BananoWebSocket webSocket, TaskTracker taskTracker)
+                        IDBConnector db, RPC rpc, BananoWebSocket webSocket, TaskTracker taskTracker,
+                        MessageGenerator messageGenerator)
     {
         super(plugin.getLogger());
 
@@ -111,6 +113,7 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
         this.rpc = rpc;
         this.webSocket = webSocket;
         this.taskTracker = taskTracker;
+        this.messageGenerator = messageGenerator;
     }
 
     @Override
@@ -422,14 +425,14 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
                     blocklink.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, blockURL.toString()));
                     blocklink.setUnderlined(true);
 
-                    sender.spigot().sendMessage(MessageGenerator.generateTipSenderMessage(target.getPlayerName(), amount, blockHash, message));
-                    sender.spigot().sendMessage(MessageGenerator.generateBlockExplorerLink(this.configEngine, blockHash));
+                    sender.spigot().sendMessage(messageGenerator.generateTipSenderMessage(Locale.ENGLISH, target.getPlayerName(), amount, blockHash, message));
+                    sender.spigot().sendMessage(messageGenerator.generateBlockExplorerLink(Locale.ENGLISH, blockHash));
 
                     Player targetPlayer = Bukkit.getPlayer(UUID.fromString(target.getPlayerUUID()));
 
                     if (targetPlayer != null && targetPlayer.isOnline())
                     {
-                        targetPlayer.spigot().sendMessage(MessageGenerator.generateTipReceiverMessage(Bukkit.getName(), amount, blockHash, message));
+                        targetPlayer.spigot().sendMessage(messageGenerator.generateTipReceiverMessage(Locale.ENGLISH, Bukkit.getName(), amount, blockHash, message));
                         targetPlayer.spigot().sendMessage(blocklink);
                     }
                     else
@@ -773,8 +776,8 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
 
         if (sender != null)
         {
-            sender.spigot().sendMessage(MessageGenerator.generateClickableAddressMessage(
-                    this.configEngine, "The master wallet has been set to: ", masterWallet));
+            sender.spigot().sendMessage(messageGenerator.generateClickableAddressMessage(
+                    "The master wallet has been set to: ", masterWallet));
         }
         else
         {

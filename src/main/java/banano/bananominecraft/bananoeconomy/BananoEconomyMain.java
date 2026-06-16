@@ -1,5 +1,6 @@
 package banano.bananominecraft.bananoeconomy;
 
+import banano.bananominecraft.bananoeconomy.classes.MessageGenerator;
 import banano.bananominecraft.bananoeconomy.commands.*;
 import banano.bananominecraft.bananoeconomy.commands.tabcompleters.*;
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
@@ -7,6 +8,7 @@ import banano.bananominecraft.bananoeconomy.db.DBConnectorFactory;
 import banano.bananominecraft.bananoeconomy.db.IDBConnector;
 import banano.bananominecraft.bananoeconomy.events.OnJoin;
 import banano.bananominecraft.bananoeconomy.events.OnLeave;
+import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import banano.bananominecraft.bananoeconomy.io.BananoWebSocket;
 import banano.bananominecraft.bananoeconomy.io.EconomyFuncs;
 import banano.bananominecraft.bananoeconomy.io.RPC;
@@ -21,6 +23,8 @@ public final class BananoEconomyMain extends JavaPlugin
 {
     private IDBConnector       db;
     private ConfigEngine       configEngine;
+    private I18n               i18n;
+    private MessageGenerator   messageGenerator;
     private RPC rpc;
     private EconomyFuncs economyFuncs;
     private BananoWebSocket webSocket;
@@ -35,35 +39,43 @@ public final class BananoEconomyMain extends JavaPlugin
         saveDefaultConfig();
 
         // --- infrastructure (order matters: config before rpc before economy) ---
-        this.db           = DBConnectorFactory.create(this);
-        this.configEngine = new ConfigEngine(this);
-        this.rpc          = new RPC(this, this.configEngine);
-        this.economyFuncs = new EconomyFuncs(this, this.db, this.rpc, this.configEngine);
-        this.webSocket    = new BananoWebSocket(this, this.rpc, this.configEngine);
+        this.db             = DBConnectorFactory.create(this);
+        this.configEngine   = new ConfigEngine(this);
+        this.i18n           = new I18n(this.getClass().getClassLoader());
+        this.messageGenerator = new MessageGenerator(this.i18n, this.configEngine);
+        this.rpc            = new RPC(this, this.configEngine);
+        this.economyFuncs   = new EconomyFuncs(this, this.db, this.rpc, this.configEngine);
+        this.webSocket      = new BananoWebSocket(this, this.rpc, this.configEngine, this.messageGenerator);
 
         // --- event listeners ---
         getServer().getPluginManager().registerEvents(
-                new OnJoin(this, this.economyFuncs, this.db, this.configEngine, this.webSocket, this.taskTracker), this);
+                new OnJoin(this, this.economyFuncs, this.db, this.configEngine,
+                           this.webSocket, this.taskTracker, this.i18n, this.messageGenerator), this);
         getServer().getPluginManager().registerEvents(
                 new OnLeave(this, this.economyFuncs, this.webSocket), this);
 
         // --- commands ---
         getCommand("deposit").setExecutor(
-                new DepositCommand(this, this.economyFuncs, this.configEngine, this.rpc));
+                new DepositCommand(this, this.economyFuncs, this.configEngine, this.rpc, this.i18n));
         getCommand("nodeinfo").setExecutor(
                 new NodeInfoCommand(this, this.rpc, this.taskTracker));
         getCommand("tip").setExecutor(
-                new TipCommand(this, this.economyFuncs, this.configEngine, this.db, this.rpc, this.taskTracker));
+                new TipCommand(this, this.economyFuncs, this.configEngine, this.db, this.rpc,
+                               this.taskTracker, this.i18n, this.messageGenerator));
         getCommand("withdraw").setExecutor(
-                new WithdrawCommand(this, this.economyFuncs, this.rpc, this.configEngine, this.taskTracker));
+                new WithdrawCommand(this, this.economyFuncs, this.rpc, this.configEngine,
+                                    this.taskTracker, this.i18n));
         getCommand("balance").setExecutor(
-                new BalanceCommand(this, this.economyFuncs, this.taskTracker));
+                new BalanceCommand(this, this.economyFuncs, this.taskTracker, this.i18n));
         getCommand("showofflinetips").setExecutor(
-                new ShowOfflineTransactionsCommand(this, this.economyFuncs, this.db, this.configEngine, this.taskTracker));
+                new ShowOfflineTransactionsCommand(this, this.economyFuncs, this.db, this.configEngine,
+                                                   this.taskTracker, this.i18n, this.messageGenerator));
         getCommand("history").setExecutor(
-                new TransactionHistoryCommand(this, this.economyFuncs, this.taskTracker, this.configEngine));
+                new TransactionHistoryCommand(this, this.economyFuncs, this.taskTracker,
+                                              this.configEngine, this.i18n, this.messageGenerator));
         getCommand("bc").setExecutor(
-                new AdminCommand(this, this.configEngine, this.economyFuncs, this.db, this.rpc, this.webSocket, this.taskTracker));
+                new AdminCommand(this, this.configEngine, this.economyFuncs, this.db, this.rpc,
+                                 this.webSocket, this.taskTracker, this.messageGenerator));
 
         // --- tab completers ---
         getCommand("tip").setTabCompleter(new TipTabCompleter(this.configEngine));

@@ -2,6 +2,7 @@ package banano.bananominecraft.bananoeconomy.io;
 
 import banano.bananominecraft.bananoeconomy.classes.MessageGenerator;
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
+import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -40,6 +41,7 @@ public class BananoWebSocket
     private final Plugin plugin;
     private final RPC rpc;
     private final ConfigEngine configEngine;
+    private final MessageGenerator messageGenerator;
 
     /**
      * wallet address → player UUID for every account currently being watched.
@@ -59,11 +61,12 @@ public class BananoWebSocket
      */
     private volatile WebSocketClient client;
 
-    public BananoWebSocket(Plugin plugin, RPC rpc, ConfigEngine configEngine)
+    public BananoWebSocket(Plugin plugin, RPC rpc, ConfigEngine configEngine, MessageGenerator messageGenerator)
     {
         this.plugin = plugin;
         this.rpc = rpc;
         this.configEngine = configEngine;
+        this.messageGenerator = messageGenerator;
         this.client = buildClient(URI.create(configEngine.getWebsocketUrl()));
     }
 
@@ -398,7 +401,8 @@ public class BananoWebSocket
             );
 
             player.spigot().sendMessage(
-                    MessageGenerator.generateBlockExplorerLink(configEngine, blockHash)
+                    messageGenerator.generateBlockExplorerLink(
+                            I18n.parseMinecraftLocale(player.getLocale()), blockHash)
             );
         });
     }

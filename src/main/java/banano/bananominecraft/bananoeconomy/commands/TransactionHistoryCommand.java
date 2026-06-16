@@ -1,11 +1,13 @@
 package banano.bananominecraft.bananoeconomy.commands;
 
+import banano.bananominecraft.bananoeconomy.classes.MessageGenerator;
+import banano.bananominecraft.bananoeconomy.classes.TransactionRecord;
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
 import banano.bananominecraft.bananoeconomy.enums.TransactionDirection;
 import banano.bananominecraft.bananoeconomy.helpers.StringHelper;
+import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import banano.bananominecraft.bananoeconomy.io.EconomyFuncs;
 import banano.bananominecraft.bananoeconomy.trackers.TaskTracker;
-import banano.bananominecraft.bananoeconomy.classes.TransactionRecord;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
@@ -16,6 +18,7 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.logging.Level;
 
 public class TransactionHistoryCommand implements CommandExecutor
@@ -26,13 +29,18 @@ public class TransactionHistoryCommand implements CommandExecutor
     private final EconomyFuncs economyFuncs;
     private final TaskTracker taskTracker;
     private final ConfigEngine configEngine;
+    private final I18n i18n;
+    private final MessageGenerator messageGenerator;
 
-    public TransactionHistoryCommand(Plugin plugin, EconomyFuncs economyFuncs, TaskTracker taskTracker, ConfigEngine configEngine)
+    public TransactionHistoryCommand(Plugin plugin, EconomyFuncs economyFuncs, TaskTracker taskTracker,
+                                     ConfigEngine configEngine, I18n i18n, MessageGenerator messageGenerator)
     {
         this.plugin = plugin;
         this.economyFuncs = economyFuncs;
         this.taskTracker = taskTracker;
         this.configEngine = configEngine;
+        this.i18n = i18n;
+        this.messageGenerator = messageGenerator;
     }
 
     @Override
@@ -40,6 +48,8 @@ public class TransactionHistoryCommand implements CommandExecutor
     {
         if (sender instanceof Player player)
         {
+            final Locale locale = I18n.parseMinecraftLocale(player.getLocale());
+
             int recordCount = ConfigEngine.DEFAULT_HISTORY_TRANSACTIONS;
             int maxTransactions = configEngine.getMaximumTransactionHistoryCount();
 
@@ -54,9 +64,10 @@ public class TransactionHistoryCommand implements CommandExecutor
                     try
                     {
                         recordCount = Integer.parseInt(args[0]);
-                    } catch (NumberFormatException e)
+                    }
+                    catch (NumberFormatException e)
                     {
-                        player.sendMessage(ChatColor.RED + "Invalid record count! Usage: /bc history <record count>");
+                        player.sendMessage(ChatColor.RED + i18n.get(locale, "history.invalid_count"));
                         return true;
                     }
                 }
@@ -64,13 +75,14 @@ public class TransactionHistoryCommand implements CommandExecutor
 
             if (recordCount < ConfigEngine.MIN_HISTORY_TRANSACTIONS)
             {
-                player.sendMessage(ChatColor.RED +  "Record Count must be greater than " + ConfigEngine.MIN_HISTORY_TRANSACTIONS + "! Usage: /bc history <record count>");
+                player.sendMessage(ChatColor.RED + i18n.get(locale, "history.count_too_low",
+                        ConfigEngine.MIN_HISTORY_TRANSACTIONS));
                 return true;
             }
 
             if (recordCount > maxTransactions)
             {
-                player.sendMessage(ChatColor.RED +  "Record Count must be less than " + maxTransactions + "! Usage: /bc history <record count>");
+                player.sendMessage(ChatColor.RED + i18n.get(locale, "history.count_too_high", maxTransactions));
                 return true;
             }
 
@@ -84,18 +96,20 @@ public class TransactionHistoryCommand implements CommandExecutor
 
                 try
                 {
-                    final List<TransactionRecord> records = economyFuncs.getTransactionHistory(player.getUniqueId(), finalRecordCount);
+                    final List<TransactionRecord> records =
+                            economyFuncs.getTransactionHistory(player.getUniqueId(), finalRecordCount);
 
-                    if (records != null
-                          && !records.isEmpty())
+                    if (records != null && !records.isEmpty())
                     {
-                        player.sendMessage(ChatColor.GOLD + TransactionRecord.getHeaderString());
+                        player.sendMessage(ChatColor.GOLD + TransactionRecord.getHeaderString(i18n, locale));
 
                         for (TransactionRecord record : records)
                         {
-                            String displayAddress = StringHelper.left(record.address(), 15) + "..." + StringHelper.right(record.address(), 15);
+                            String displayAddress = StringHelper.left(record.address(), 15)
+                                    + "..."
+                                    + StringHelper.right(record.address(), 15);
 
-                            player.spigot().sendMessage(record.toRecordString(this.configEngine));
+                            player.spigot().sendMessage(record.toRecordString(messageGenerator));
 
                             if (record.direction() == TransactionDirection.Send)
                             {
@@ -109,13 +123,14 @@ public class TransactionHistoryCommand implements CommandExecutor
                     }
                     else
                     {
-                        player.sendMessage(ChatColor.YELLOW + "No records found!");
+                        player.sendMessage(ChatColor.YELLOW + i18n.get(locale, "history.no_records"));
                     }
                 }
                 catch (Exception ex)
                 {
-                    plugin.getLogger().log(Level.WARNING, "Failed to retrieve history for player: " + player.getName(), ex);
-                    player.sendMessage(ChatColor.RED + "An error occurred retrieving your transaction history! Please try again in a moment.");
+                    plugin.getLogger().log(Level.WARNING,
+                            "Failed to retrieve history for player: " + player.getName(), ex);
+                    player.sendMessage(ChatColor.RED + i18n.get(locale, "history.error"));
                 }
             });
 

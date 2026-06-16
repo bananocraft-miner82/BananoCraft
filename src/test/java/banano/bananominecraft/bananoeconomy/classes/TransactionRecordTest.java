@@ -2,14 +2,17 @@ package banano.bananominecraft.bananoeconomy.classes;
 
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
 import banano.bananominecraft.bananoeconomy.enums.TransactionDirection;
+import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import net.md_5.bungee.api.ChatColor;
 import net.md_5.bungee.api.chat.BaseComponent;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.time.LocalDateTime;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.when;
@@ -27,6 +30,24 @@ class TransactionRecordTest
     private static final LocalDateTime DATE = LocalDateTime.of(2025, 5, 16, 14, 30);
 
     @Mock private ConfigEngine configEngine;
+    @Mock private I18n i18n;
+
+    /** Real instance backed by mocked deps — set up fresh before each test. */
+    private MessageGenerator messageGenerator;
+
+    @BeforeEach
+    void setUp()
+    {
+        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
+
+        // Header column labels (English defaults)
+        when(i18n.get(Locale.ENGLISH, "history.col_date")).thenReturn("Date");
+        when(i18n.get(Locale.ENGLISH, "history.col_amount")).thenReturn("Amount");
+        when(i18n.get(Locale.ENGLISH, "history.col_confirmed")).thenReturn("C");
+        when(i18n.get(Locale.ENGLISH, "history.col_hash")).thenReturn("Hash");
+
+        messageGenerator = new MessageGenerator(i18n, configEngine);
+    }
 
     /**
      * Extracts readable plain text from a BaseComponent array.
@@ -66,32 +87,32 @@ class TransactionRecordTest
     @Test
     void headerString_containsDateLabel()
     {
-        assertTrue(TransactionRecord.getHeaderString().contains("Date"));
+        assertTrue(TransactionRecord.getHeaderString(i18n, Locale.ENGLISH).contains("Date"));
     }
 
     @Test
     void headerString_containsAmountLabel()
     {
-        assertTrue(TransactionRecord.getHeaderString().contains("Amount"));
+        assertTrue(TransactionRecord.getHeaderString(i18n, Locale.ENGLISH).contains("Amount"));
     }
 
     @Test
     void headerString_containsConfirmedLabel()
     {
         // Header uses abbreviated "C" for the confirmed column
-        assertTrue(TransactionRecord.getHeaderString().contains("C"));
+        assertTrue(TransactionRecord.getHeaderString(i18n, Locale.ENGLISH).contains("C"));
     }
 
     @Test
     void headerString_containsHashLabel()
     {
-        assertTrue(TransactionRecord.getHeaderString().contains("Hash"));
+        assertTrue(TransactionRecord.getHeaderString(i18n, Locale.ENGLISH).contains("Hash"));
     }
 
     @Test
     void headerString_dateAppearsBeforeAmount()
     {
-        String header = TransactionRecord.getHeaderString();
+        String header = TransactionRecord.getHeaderString(i18n, Locale.ENGLISH);
         assertTrue(header.indexOf("Date") < header.indexOf("Amount"),
                 "'Date' column should appear before 'Amount' column");
     }
@@ -99,7 +120,7 @@ class TransactionRecordTest
     @Test
     void headerString_amountAppearsBeforeHash()
     {
-        String header = TransactionRecord.getHeaderString();
+        String header = TransactionRecord.getHeaderString(i18n, Locale.ENGLISH);
         assertTrue(header.indexOf("Amount") < header.indexOf("Hash"),
                 "'Amount' column should appear before 'Hash' column");
     }
@@ -111,23 +132,21 @@ class TransactionRecordTest
     @Test
     void toRecordString_dateFormattedAsDdMmYyHHmm()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Receive, 10.0, HASH, true);
 
         // "16/05/25 14:30" must appear at the very start of the plain-text row
-        assertTrue(plainText(record.toRecordString(configEngine)).startsWith("16/05/25 14:30"),
+        assertTrue(plainText(record.toRecordString(messageGenerator)).startsWith("16/05/25 14:30"),
                 "Row should start with the date formatted as dd/MM/yy HH:mm");
     }
 
     @Test
     void toRecordString_leadingZeroPaddedDate()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         // Day 1, month 1 should both be zero-padded: "01/01/25 09:05"
         LocalDateTime earlyDate = LocalDateTime.of(2025, 1, 1, 9, 5);
         TransactionRecord record = new TransactionRecord(earlyDate, WALLET, TransactionDirection.Receive, 1.0, HASH, false);
 
-        assertTrue(plainText(record.toRecordString(configEngine)).startsWith("01/01/25 09:05"),
+        assertTrue(plainText(record.toRecordString(messageGenerator)).startsWith("01/01/25 09:05"),
                 "Single-digit day, month and hour should be zero-padded");
     }
 
@@ -138,9 +157,8 @@ class TransactionRecordTest
     @Test
     void toRecordString_confirmed_showsY()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Receive, 10.0, HASH, true);
-        String row = plainText(record.toRecordString(configEngine));
+        String row = plainText(record.toRecordString(messageGenerator));
 
         assertTrue(row.contains("Y"),  "Confirmed record should show 'Y' in the row");
         assertFalse(row.contains("N"), "Confirmed record should not show 'N' in the row");
@@ -149,9 +167,8 @@ class TransactionRecordTest
     @Test
     void toRecordString_unconfirmed_showsN()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Receive, 10.0, HASH, false);
-        String row = plainText(record.toRecordString(configEngine));
+        String row = plainText(record.toRecordString(messageGenerator));
 
         assertTrue(row.contains("N"),  "Unconfirmed record should show 'N' in the row");
         assertFalse(row.contains("Y"), "Unconfirmed record should not show 'Y' in the row");
@@ -164,21 +181,19 @@ class TransactionRecordTest
     @Test
     void toRecordString_hashTruncatedToEightCharsWithEllipsis()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Send, 5.0, HASH, true);
 
         // First 8 chars of HASH are "abcdef12"
-        assertTrue(plainText(record.toRecordString(configEngine)).contains("abcdef12..."),
+        assertTrue(plainText(record.toRecordString(messageGenerator)).contains("abcdef12..."),
                 "Row should contain the first 8 hash characters followed by '...'");
     }
 
     @Test
     void toRecordString_fullHashNotIncluded()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Send, 5.0, HASH, true);
 
-        assertFalse(plainText(record.toRecordString(configEngine)).contains(HASH),
+        assertFalse(plainText(record.toRecordString(messageGenerator)).contains(HASH),
                 "Full hash should not appear in the row string");
     }
 
@@ -189,9 +204,8 @@ class TransactionRecordTest
     @Test
     void toRecordString_wholeNumberAmount_noTrailingDecimalPoint()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Send, 25.0, HASH, false);
-        String row = plainText(record.toRecordString(configEngine));
+        String row = plainText(record.toRecordString(messageGenerator));
 
         assertTrue(row.contains("25"),    "Integer amount 25.0 should render as '25'");
         assertFalse(row.contains("25.0"), "Trailing '.0' should be suppressed");
@@ -200,20 +214,18 @@ class TransactionRecordTest
     @Test
     void toRecordString_fractionalAmount_retainsSignificantDecimals()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Send, 12.34, HASH, false);
 
-        assertTrue(plainText(record.toRecordString(configEngine)).contains("12.34"),
+        assertTrue(plainText(record.toRecordString(messageGenerator)).contains("12.34"),
                 "Amount 12.34 should be rendered in full");
     }
 
     @Test
     void toRecordString_singleDecimalAmount_noTrailingZero()
     {
-        when(configEngine.getExplorerBlock()).thenReturn(EXPLORER_URL);
         // DecimalFormat "#.##" renders 7.5 as "7.5", not "7.50"
         TransactionRecord record = new TransactionRecord(DATE, WALLET, TransactionDirection.Send, 7.5, HASH, false);
-        String row = plainText(record.toRecordString(configEngine));
+        String row = plainText(record.toRecordString(messageGenerator));
 
         assertTrue(row.contains("7.5"),    "Amount 7.5 should render as '7.5'");
         assertFalse(row.contains("7.50"), "Trailing zero should be suppressed");

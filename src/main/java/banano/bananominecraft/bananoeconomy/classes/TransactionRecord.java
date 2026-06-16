@@ -1,12 +1,11 @@
 package banano.bananominecraft.bananoeconomy.classes;
 
-import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
 import banano.bananominecraft.bananoeconomy.enums.TransactionDirection;
 import banano.bananominecraft.bananoeconomy.helpers.StringHelper;
+import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import net.md_5.bungee.api.ChatColor;
 import net.md_5.bungee.api.chat.BaseComponent;
 import net.md_5.bungee.api.chat.ComponentBuilder;
-import net.md_5.bungee.api.chat.TextComponent;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
@@ -32,7 +31,15 @@ public record TransactionRecord(
     private static final int COL_CONF   =  3; // "Y/N"
     private static final int COL_HASH   = 11; // "xxxxxxxx..."
 
-    public BaseComponent[] toRecordString(ConfigEngine configEngine)
+    /**
+     * Formats a single history row as a BungeeCord component array.
+     *
+     * <p>The hash is rendered as a clickable block-explorer link via
+     * {@link MessageGenerator#generateBlockExplorerLink(String, String)}.</p>
+     *
+     * @param messageGenerator the plugin's shared {@link MessageGenerator} instance
+     */
+    public BaseComponent[] toRecordString(MessageGenerator messageGenerator)
     {
         final DecimalFormat df = new DecimalFormat("#.##", new DecimalFormatSymbols(Locale.US));
         final StringBuilder sb = new StringBuilder();
@@ -47,20 +54,27 @@ public record TransactionRecord(
 
         ComponentBuilder componentBuilder = new ComponentBuilder(sb.toString());
 
-        componentBuilder.append(MessageGenerator.generateBlockExplorerLink(configEngine, transactionHash, transactionHash.substring(0, 8)));
+        componentBuilder.append(messageGenerator.generateBlockExplorerLink(
+                transactionHash, transactionHash.substring(0, 8)));
         componentBuilder.append("...");
 
         return componentBuilder.create();
     }
 
-    public static String getHeaderString()
+    /**
+     * Returns a translated, fixed-width column header string for the history table.
+     *
+     * @param i18n   the plugin's {@link I18n} instance
+     * @param locale the player's locale
+     */
+    public static String getHeaderString(I18n i18n, Locale locale)
     {
         final StringBuilder sb = new StringBuilder();
 
-        sb.append(StringHelper.padRight("Date",        COL_DATE   + 1));
-        sb.append(StringHelper.padRight("Amount",      COL_AMOUNT + 1));
-        sb.append(StringHelper.padRight("C",           COL_CONF   + 1));
-        sb.append("Hash");
+        sb.append(StringHelper.padRight(i18n.get(locale, "history.col_date"),      COL_DATE   + 1));
+        sb.append(StringHelper.padRight(i18n.get(locale, "history.col_amount"),    COL_AMOUNT + 1));
+        sb.append(StringHelper.padRight(i18n.get(locale, "history.col_confirmed"), COL_CONF   + 1));
+        sb.append(i18n.get(locale, "history.col_hash"));
 
         return sb.toString();
     }
