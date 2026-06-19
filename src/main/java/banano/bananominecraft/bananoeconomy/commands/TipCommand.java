@@ -1,14 +1,13 @@
 package banano.bananominecraft.bananoeconomy.commands;
 
 import banano.bananominecraft.bananoeconomy.classes.MessageGenerator;
-import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
 import banano.bananominecraft.bananoeconomy.db.IDBConnector;
-import banano.bananominecraft.bananoeconomy.exceptions.TransactionError;
 import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import banano.bananominecraft.bananoeconomy.io.EconomyFuncs;
 import banano.bananominecraft.bananoeconomy.io.RPC;
+import banano.bananominecraft.bananoeconomy.services.TipService;
 import banano.bananominecraft.bananoeconomy.trackers.TaskTracker;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -19,7 +18,6 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.UUID;
@@ -36,10 +34,20 @@ public class TipCommand extends BaseCommand implements CommandExecutor
     private final TaskTracker taskTracker;
     private final I18n i18n;
     private final MessageGenerator messageGenerator;
+    private final TipService tipService;
 
     public TipCommand(final JavaPlugin plugin, EconomyFuncs economyFuncs, ConfigEngine configEngine,
                       IDBConnector db, RPC rpc, TaskTracker taskTracker,
                       I18n i18n, MessageGenerator messageGenerator)
+    {
+        this(plugin, economyFuncs, configEngine, db, rpc, taskTracker, i18n, messageGenerator,
+                new TipService(db, rpc));
+    }
+
+    /** Service-injecting constructor — pass a mock {@link TipService} in tests. */
+    public TipCommand(final JavaPlugin plugin, EconomyFuncs economyFuncs, ConfigEngine configEngine,
+                      IDBConnector db, RPC rpc, TaskTracker taskTracker,
+                      I18n i18n, MessageGenerator messageGenerator, TipService tipService)
     {
         super(plugin.getLogger());
         this.plugin = plugin;
@@ -50,6 +58,7 @@ public class TipCommand extends BaseCommand implements CommandExecutor
         this.taskTracker = taskTracker;
         this.i18n = i18n;
         this.messageGenerator = messageGenerator;
+        this.tipService = tipService;
     }
 
     @Override
@@ -138,47 +147,34 @@ public class TipCommand extends BaseCommand implements CommandExecutor
 
             SendMessage(player, i18n.get(locale, "tip.sending", target.getPlayerName(), amount), ChatColor.WHITE);
 
-            final String sWallet  = senderRecord.getWallet();
-            final String tWallet  = target.getWallet();
-            final String blockHash;
+            // The recipient's online status is the only Bukkit lookup the transfer needs;
+            // resolve it here and hand the rest to the framework-free service.
+            final Player targetPlayer = Bukkit.getPlayer(UUID.fromString(target.getPlayerUUID()));
+            final boolean recipientOnline = targetPlayer != null && targetPlayer.isOnline();
 
-            try
+            final TipService.TransferResult result = tipService.transfer(
+                    senderRecord.getWallet(), target.getWallet(), UUID.fromString(target.getPlayerUUID()),
+                    amount, message, player.getDisplayName(), recipientOnline);
+
+            if (result.status() == TipService.TransferResult.Status.FAILED)
             {
-                blockHash = rpc.sendTransaction(sWallet, tWallet, amount);
-            }
-            catch (final TransactionError error)
-            {
-                SendMessage(player, i18n.get(locale, "tip.failed", sAmount, targetPlayerName, error.getUserError()), ChatColor.RED);
+                SendMessage(player, i18n.get(locale, "tip.failed", sAmount, targetPlayerName, result.userError()), ChatColor.RED);
                 return;
             }
 
             try
             {
-                player.spigot().sendMessage(messageGenerator.generateTipSenderMessage(locale, target.getPlayerName(), amount, blockHash, message));
-                player.spigot().sendMessage(messageGenerator.generateBlockExplorerLink(locale, blockHash));
+                player.spigot().sendMessage(messageGenerator.generateTipSenderMessage(locale, target.getPlayerName(), amount, result.blockHash(), message));
+                player.spigot().sendMessage(messageGenerator.generateBlockExplorerLink(locale, result.blockHash()));
 
-                Player targetPlayer = Bukkit.getPlayer(UUID.fromString(target.getPlayerUUID()));
-
-                if (targetPlayer != null && targetPlayer.isOnline())
+                // SENT_OFFLINE: the service already persisted the notification record.
+                if (result.status() == TipService.TransferResult.Status.SENT_ONLINE)
                 {
                     // Resolve the recipient's own locale for the message they see
                     Locale targetLocale = I18n.parseMinecraftLocale(targetPlayer.getLocale());
                     targetPlayer.spigot().sendMessage(messageGenerator.generateTipReceiverMessage(
-                            targetLocale, player.getDisplayName(), amount, blockHash, message));
-                    targetPlayer.spigot().sendMessage(messageGenerator.generateBlockExplorerLink(targetLocale, blockHash));
-                }
-                else
-                {
-                    // Generate an offline transaction record to tell them when they next log in
-                    OfflinePaymentRecord paymentRecord = new OfflinePaymentRecord(
-                            UUID.fromString(target.getPlayerUUID()),
-                            player.getDisplayName(),
-                            amount,
-                            blockHash,
-                            LocalDateTime.now(),
-                            message);
-
-                    this.db.saveOfflinePayment(paymentRecord);
+                            targetLocale, player.getDisplayName(), amount, result.blockHash(), message));
+                    targetPlayer.spigot().sendMessage(messageGenerator.generateBlockExplorerLink(targetLocale, result.blockHash()));
                 }
             }
             catch (Exception e)

@@ -1,10 +1,10 @@
 package banano.bananominecraft.bananoeconomy.commands;
 
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
-import banano.bananominecraft.bananoeconomy.exceptions.TransactionError;
 import banano.bananominecraft.bananoeconomy.i18n.I18n;
 import banano.bananominecraft.bananoeconomy.io.EconomyFuncs;
 import banano.bananominecraft.bananoeconomy.io.RPC;
+import banano.bananominecraft.bananoeconomy.services.WithdrawService;
 import banano.bananominecraft.bananoeconomy.trackers.TaskTracker;
 import net.md_5.bungee.api.ChatColor;
 import net.md_5.bungee.api.chat.ClickEvent;
@@ -24,24 +24,30 @@ import java.util.logging.Level;
 
 public class WithdrawCommand implements CommandExecutor
 {
-    private static final String ARG_ALL = "all";
-
     private final JavaPlugin plugin;
     private final EconomyFuncs economyFuncs;
-    private final RPC rpc;
     private final ConfigEngine configEngine;
     private final TaskTracker taskTracker;
     private final I18n i18n;
+    private final WithdrawService withdrawService;
 
     public WithdrawCommand(final JavaPlugin plugin, EconomyFuncs economyFuncs, RPC rpc,
                            ConfigEngine configEngine, TaskTracker taskTracker, I18n i18n)
     {
+        this(plugin, economyFuncs, configEngine, taskTracker, i18n, new WithdrawService(rpc));
+    }
+
+    /** Service-injecting constructor — pass a mock {@link WithdrawService} in tests. */
+    public WithdrawCommand(final JavaPlugin plugin, EconomyFuncs economyFuncs,
+                           ConfigEngine configEngine, TaskTracker taskTracker, I18n i18n,
+                           WithdrawService withdrawService)
+    {
         this.plugin = plugin;
         this.economyFuncs = economyFuncs;
-        this.rpc = rpc;
         this.configEngine = configEngine;
         this.taskTracker = taskTracker;
         this.i18n = i18n;
+        this.withdrawService = withdrawService;
     }
 
     @Override
@@ -71,16 +77,7 @@ public class WithdrawCommand implements CommandExecutor
 
                     try
                     {
-                        double amount;
-
-                        if (args[0].equalsIgnoreCase(ARG_ALL))
-                        {
-                            amount = rpc.getBalance(playerWallet);
-                        }
-                        else
-                        {
-                            amount = Double.parseDouble(args[0]);
-                        }
+                        double amount = withdrawService.resolveAmount(playerWallet, args[0]);
 
                         if (amount <= 0)
                         {
@@ -94,18 +91,17 @@ public class WithdrawCommand implements CommandExecutor
                         if (args.length == 2)
                         {
                             final String withdrawAddr = args[1];
-                            final String blockHash;
 
-                            try
+                            WithdrawService.WithdrawResult result =
+                                    withdrawService.withdraw(playerWallet, withdrawAddr, amount);
+
+                            if (!result.success())
                             {
-                                blockHash = rpc.sendTransaction(playerWallet, withdrawAddr, amount);
-                            }
-                            catch (final TransactionError error)
-                            {
-                                player.sendMessage(i18n.get(locale, "withdraw.failed", amountStr, withdrawAddr, error.getUserError()));
+                                player.sendMessage(i18n.get(locale, "withdraw.failed", amountStr, withdrawAddr, result.userError()));
                                 return;
                             }
 
+                            final String blockHash = result.blockHash();
                             player.sendMessage(blockHash);
 
                             try

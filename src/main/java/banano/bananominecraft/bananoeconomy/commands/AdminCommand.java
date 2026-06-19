@@ -3,13 +3,13 @@ package banano.bananominecraft.bananoeconomy.commands;
 import banano.bananominecraft.bananoeconomy.io.BananoWebSocket;
 import banano.bananominecraft.bananoeconomy.io.EconomyFuncs;
 import banano.bananominecraft.bananoeconomy.io.RPC;
+import banano.bananominecraft.bananoeconomy.services.TipService;
+import banano.bananominecraft.bananoeconomy.services.WithdrawService;
 import banano.bananominecraft.bananoeconomy.trackers.TaskTracker;
 import banano.bananominecraft.bananoeconomy.classes.MessageGenerator;
-import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
 import banano.bananominecraft.bananoeconomy.db.IDBConnector;
-import banano.bananominecraft.bananoeconomy.exceptions.TransactionError;
 import net.md_5.bungee.api.chat.*;
 import org.bukkit.scheduler.BukkitTask;
 import java.util.logging.Level;
@@ -25,7 +25,6 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 import java.net.URL;
 import java.text.DecimalFormat;
-import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
@@ -99,6 +98,8 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
     private final BananoWebSocket webSocket;
     private final TaskTracker taskTracker;
     private final MessageGenerator messageGenerator;
+    private final TipService tipService;
+    private final WithdrawService withdrawService;
 
     public AdminCommand(Plugin plugin, ConfigEngine configEngine, EconomyFuncs economyFuncs,
                         IDBConnector db, RPC rpc, BananoWebSocket webSocket, TaskTracker taskTracker,
@@ -114,6 +115,8 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
         this.webSocket = webSocket;
         this.taskTracker = taskTracker;
         this.messageGenerator = messageGenerator;
+        this.tipService = new TipService(db, rpc);
+        this.withdrawService = new WithdrawService(rpc);
     }
 
     @Override
@@ -263,16 +266,7 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
 
                 try
                 {
-                    double amount;
-
-                    if (args[2].equalsIgnoreCase(ARG_ALL))
-                    {
-                        amount = rpc.getBalance(wallet);
-                    }
-                    else
-                    {
-                        amount = Double.parseDouble(args[2]);
-                    }
+                    double amount = withdrawService.resolveAmount(wallet, args[2]);
 
                     if (amount <= 0)
                     {
@@ -285,18 +279,17 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
                     if (args.length == 4)
                     {
                         final String withdrawAddr = args[3];
-                        final String blockHash;
 
-                        try
+                        WithdrawService.WithdrawResult result =
+                                withdrawService.withdraw(wallet, withdrawAddr, amount);
+
+                        if (!result.success())
                         {
-                            blockHash = rpc.sendTransaction(wallet, withdrawAddr, amount);
-                        }
-                        catch (final TransactionError error)
-                        {
-                            SendMessage(sender, String.format("/withdraw %f %s failed with: %s", amount, withdrawAddr, error.getUserError()), ChatColor.RED);
+                            SendMessage(sender, String.format("/withdraw %f %s failed with: %s", amount, withdrawAddr, result.userError()), ChatColor.RED);
                             return;
                         }
 
+                        final String blockHash = result.blockHash();
                         SendMessage(sender, blockHash, ChatColor.YELLOW);
 
                         try
@@ -401,24 +394,26 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
                 SendMessage(sender, "Tipping " + target.getPlayerName() + " with " + amount + " bans.", ChatColor.YELLOW);
 
                 final String sWallet = this.configEngine.getMasterWallet();
-                final String tWallet = target.getWallet();
-                final String blockHash;
+                final String message = args.length > 4
+                        ? String.join(" ", Arrays.copyOfRange(args, 4, args.length))
+                        : "";
 
-                try
+                final Player targetPlayer = Bukkit.getPlayer(UUID.fromString(target.getPlayerUUID()));
+                final boolean recipientOnline = targetPlayer != null && targetPlayer.isOnline();
+
+                final TipService.TransferResult result = tipService.transfer(
+                        sWallet, target.getWallet(), UUID.fromString(target.getPlayerUUID()),
+                        amount, message, Bukkit.getName(), recipientOnline);
+
+                if (result.status() == TipService.TransferResult.Status.FAILED)
                 {
-                    blockHash = rpc.sendTransaction(sWallet, tWallet, amount);
-                }
-                catch (final TransactionError error)
-                {
-                    SendMessage(sender, String.format("Tip of %s to %s failed with: %s", sAmount, targetPlayerName, error.getUserError()), ChatColor.RED);
+                    SendMessage(sender, String.format("Tip of %s to %s failed with: %s", sAmount, targetPlayerName, result.userError()), ChatColor.RED);
                     return;
                 }
 
                 try
                 {
-                    final String message = args.length > 4
-                            ? String.join(" ", Arrays.copyOfRange(args, 4, args.length))
-                            : "";
+                    final String blockHash = result.blockHash();
                     final URL blockURL = new URL(new URL(this.configEngine.getExplorerBlock()) + blockHash);
                     final TextComponent blocklink = new TextComponent("Click me to view the transaction in the block explorer");
 
@@ -428,25 +423,11 @@ public class AdminCommand extends BaseCommand implements CommandExecutor
                     sender.spigot().sendMessage(messageGenerator.generateTipSenderMessage(Locale.ENGLISH, target.getPlayerName(), amount, blockHash, message));
                     sender.spigot().sendMessage(messageGenerator.generateBlockExplorerLink(Locale.ENGLISH, blockHash));
 
-                    Player targetPlayer = Bukkit.getPlayer(UUID.fromString(target.getPlayerUUID()));
-
-                    if (targetPlayer != null && targetPlayer.isOnline())
+                    // SENT_OFFLINE: the service already saved the offline payment record.
+                    if (result.status() == TipService.TransferResult.Status.SENT_ONLINE)
                     {
                         targetPlayer.spigot().sendMessage(messageGenerator.generateTipReceiverMessage(Locale.ENGLISH, Bukkit.getName(), amount, blockHash, message));
                         targetPlayer.spigot().sendMessage(blocklink);
-                    }
-                    else
-                    {
-                        // Generate an offline transaction record to tell them when they next log in
-                        OfflinePaymentRecord paymentRecord = new OfflinePaymentRecord(
-                                UUID.fromString(target.getPlayerUUID()),
-                                Bukkit.getName(),
-                                amount,
-                                blockHash,
-                                LocalDateTime.now(),
-                                message);
-
-                        this.db.saveOfflinePayment(paymentRecord);
                     }
                 }
                 catch (Exception e)

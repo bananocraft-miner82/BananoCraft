@@ -10,15 +10,10 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.bukkit.plugin.Plugin;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
-import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -42,11 +37,22 @@ public class RPC
 
     private final Plugin plugin;
     private final ConfigEngine configEngine;
+    private final HttpTransport http;
 
     public RPC(Plugin plugin, ConfigEngine configEngine)
     {
+        this(plugin, configEngine, new HttpUrlConnectionTransport());
+    }
+
+    /**
+     * Transport-injecting constructor — pass a mock {@link HttpTransport} in tests to
+     * exercise the JSON-RPC logic without touching the network.
+     */
+    public RPC(Plugin plugin, ConfigEngine configEngine, HttpTransport http)
+    {
         this.plugin = plugin;
         this.configEngine = configEngine;
+        this.http = http;
     }
 
     public URL getURL() throws Exception
@@ -75,34 +81,7 @@ public class RPC
 
     public String sendPost(String payload) throws Exception
     {
-        URL url = getURL();
-
-        HttpURLConnection con = (HttpURLConnection) url.openConnection();
-        con.setRequestMethod("POST");
-        con.setRequestProperty("Content-Type", "application/json; utf-8");
-        con.setRequestProperty("Accept", "application/json");
-        con.setDoOutput(true);
-
-        // Write request — let the exception propagate so callers don't attempt
-        // to read a response that will never arrive.
-        try (OutputStream os = con.getOutputStream())
-        {
-            byte[] input = payload.getBytes(StandardCharsets.UTF_8);
-            os.write(input, 0, input.length);
-        }
-
-        StringBuilder response = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(con.getInputStream(), StandardCharsets.UTF_8)))
-        {
-            String responseLine;
-            while ((responseLine = br.readLine()) != null)
-            {
-                response.append(responseLine.trim());
-            }
-        }
-
-        return response.toString();
+        return http.post(configEngine.getNodeAddress(), payload);
     }
 
     // -------------------------------------------------------------------------
