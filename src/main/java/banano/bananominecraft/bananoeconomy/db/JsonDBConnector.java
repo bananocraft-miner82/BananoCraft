@@ -1,8 +1,10 @@
 package banano.bananominecraft.bananoeconomy.db;
 
+import banano.bananominecraft.bananoeconomy.classes.BankRecord;
 import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import com.google.gson.*;
+import com.google.gson.reflect.TypeToken;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
@@ -10,12 +12,11 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import java.io.*;
+import java.lang.reflect.Type;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
@@ -55,6 +56,8 @@ public class JsonDBConnector extends BaseDBConnector
         this.dataLocation = initialiseDataDirectory();
         loadClaimedWallets();
         loadOfflinePayments();
+        loadBanks();
+        loadBankMembers();
 
         // Persist offline payments every 15 minutes in case of an unclean shutdown.
         Bukkit.getScheduler().scheduleSyncRepeatingTask(plugin, this::saveOfflinePaymentRecords,
@@ -153,7 +156,9 @@ public class JsonDBConnector extends BaseDBConnector
         {
             return false;
         }
+
         offlinePaymentRecords.add(paymentRecord);
+
         return true;
     }
 
@@ -164,6 +169,7 @@ public class JsonDBConnector extends BaseDBConnector
         {
             return new ArrayList<>();
         }
+
         return offlinePaymentRecords.stream()
                 .filter(r -> r.targetPlayerUUID().equals(forPlayer.getUniqueId()))
                 .toList();
@@ -185,10 +191,85 @@ public class JsonDBConnector extends BaseDBConnector
         {
             return 0;
         }
+
         return offlinePaymentRecords.stream()
                 .filter(r -> r.targetPlayerUUID().equals(forPlayer.getUniqueId()))
                 .mapToDouble(OfflinePaymentRecord::paymentAmount)
                 .sum();
+    }
+
+    // -------------------------------------------------------------------------
+    // IDBConnector — bank accounts
+    // -------------------------------------------------------------------------
+
+    @Override
+    public boolean createBankRecord(BankRecord bank)
+    {
+        if (bankRecords.putIfAbsent(bank.getBankName(), bank) != null)
+        {
+            return false;
+        }
+
+        saveBanks();
+        return true;
+    }
+
+    @Override
+    public boolean bankNameExists(String bankName)
+    {
+        return bankRecords.containsKey(bankName);
+    }
+
+    @Override
+    public boolean deleteBankRecord(String bankName)
+    {
+        BankRecord removed = bankRecords.remove(bankName);
+
+        if (removed == null)
+        {
+            return false;
+        }
+
+        bankMembers.remove(bankName);
+        saveBanks();
+        saveBankMembers();
+
+        return true;
+    }
+
+    @Override
+    public List<String> getAllBankNames()
+    {
+        return new ArrayList<>(bankRecords.keySet());
+    }
+
+    @Override
+    public boolean addBankMember(String bankName, String playerUuid)
+    {
+        bankMembers.computeIfAbsent(bankName, k -> ConcurrentHashMap.newKeySet()).add(playerUuid);
+        saveBankMembers();
+
+        return true;
+    }
+
+    @Override
+    public boolean removeBankMember(String bankName, String playerUuid)
+    {
+        Set<String> members = bankMembers.get(bankName);
+
+        if (members == null)
+        {
+            return false;
+        }
+
+        boolean removed = members.remove(playerUuid);
+
+        if (removed)
+        {
+            saveBankMembers();
+        }
+
+        return removed;
     }
 
     // -------------------------------------------------------------------------
@@ -198,10 +279,12 @@ public class JsonDBConnector extends BaseDBConnector
     private File initialiseDataDirectory()
     {
         File dir = new File(plugin.getDataFolder(), DATA_DIRECTORY);
+
         if (!dir.exists())
         {
             dir.mkdirs();
         }
+
         return dir;
     }
 
@@ -218,6 +301,7 @@ public class JsonDBConnector extends BaseDBConnector
             public void run()
             {
                 File[] files = dataLocation.listFiles();
+
                 if (files == null)
                 {
                     return; // directory I/O error or not a directory
@@ -248,6 +332,7 @@ public class JsonDBConnector extends BaseDBConnector
     private PlayerRecord getPlayerRecord(UUID playerUUID, boolean cacheRecord)
     {
         PlayerRecord cached = playerRecords.get(playerUUID);
+
         if (cached != null)
         {
             return cached;
@@ -276,6 +361,7 @@ public class JsonDBConnector extends BaseDBConnector
                     playerRecords.put(playerUUID, record);
                 }
                 plugin.getLogger().info("Player loaded: " + record.getPlayerName());
+
                 return record;
             }
         }
@@ -290,6 +376,111 @@ public class JsonDBConnector extends BaseDBConnector
     private boolean hasPlayerRecord(UUID playerUUID)
     {
         return new File(this.dataLocation, playerUUID + ".json").exists();
+    }
+
+    private void loadBanks()
+    {
+        File file = new File(dataLocation, "banks.json");
+        if (!file.exists())
+        {
+            return;
+        }
+
+        try (Reader reader = new FileReader(file))
+        {
+            BankRecord[] records = new GsonBuilder().create().fromJson(reader, BankRecord[].class);
+
+            if (records != null)
+            {
+                for (BankRecord record : records)
+                {
+                    bankRecords.put(record.getBankName(), record);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to load banks.json.", ex);
+        }
+    }
+
+    private void saveBanks()
+    {
+        File file = new File(dataLocation, "banks.json");
+
+        try
+        {
+            if (!file.exists())
+            {
+                file.createNewFile();
+            }
+
+            try (Writer writer = new FileWriter(file, false))
+            {
+                new GsonBuilder().create().toJson(bankRecords.values().toArray(), writer);
+            }
+        }
+        catch (IOException ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to save banks.json.", ex);
+        }
+    }
+
+    private void loadBankMembers()
+    {
+        File file = new File(dataLocation, "bank_members.json");
+        if (!file.exists())
+        {
+            return;
+        }
+
+        try (Reader reader = new FileReader(file))
+        {
+            Type type = new TypeToken<Map<String, List<String>>>() {}.getType();
+            Map<String, List<String>> loaded = new GsonBuilder().create().fromJson(reader, type);
+
+            if (loaded != null)
+            {
+                for (Map.Entry<String, List<String>> entry : loaded.entrySet())
+                {
+                    Set<String> memberSet = ConcurrentHashMap.newKeySet();
+                    memberSet.addAll(entry.getValue());
+                    bankMembers.put(entry.getKey(), memberSet);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to load bank_members.json.", ex);
+        }
+    }
+
+    private void saveBankMembers()
+    {
+        File file = new File(dataLocation, "bank_members.json");
+
+        try
+        {
+            if (!file.exists())
+            {
+                file.createNewFile();
+            }
+
+            Map<String, List<String>> serializable = new HashMap<>();
+            for (Map.Entry<String, Set<String>> entry : bankMembers.entrySet())
+            {
+                serializable.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+            }
+
+            try (Writer writer = new FileWriter(file, false))
+            {
+                new GsonBuilder().create().toJson(serializable, writer);
+            }
+        }
+        catch (IOException ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to save bank_members.json.", ex);
+        }
     }
 
     /** Persist the current in-memory offline payments list to disk. */
@@ -342,6 +533,7 @@ public class JsonDBConnector extends BaseDBConnector
             if (!file.exists())
             {
                 file.createNewFile();
+
                 return; // nothing to load from a new file
             }
 

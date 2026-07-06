@@ -1,5 +1,6 @@
 package banano.bananominecraft.bananoeconomy.db;
 
+import banano.bananominecraft.bananoeconomy.classes.BankRecord;
 import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import com.mongodb.BasicDBObject;
@@ -8,6 +9,8 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.MongoWriteException;
+import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.Document;
 import org.bson.types.ObjectId;
@@ -18,18 +21,19 @@ import org.bukkit.plugin.Plugin;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 import static com.mongodb.client.model.Filters.*;
 
 public class MongoDBConnector extends BaseDBConnector
 {
-    private static final String DATABASE_NAME           = "BananoCraft";
-    private static final String COLLECTION_USERS        = "users";
-    private static final String COLLECTION_OFFLINE_PAYS = "offlinepayments";
+    private static final String DATABASE_NAME            = "BananoCraft";
+    private static final String COLLECTION_USERS         = "users";
+    private static final String COLLECTION_OFFLINE_PAYS  = "offlinepayments";
+    private static final String COLLECTION_BANKS         = "banks";
+    private static final String COLLECTION_BANK_MEMBERS  = "bank_members";
 
     private final Plugin plugin;
     private final MongoClient mongoClient;
@@ -92,6 +96,7 @@ public class MongoDBConnector extends BaseDBConnector
                     .append("frozen", playerRecord.isFrozen());
 
             db.getCollection(COLLECTION_USERS).insertOne(document);
+
             return true;
         }
         catch (Exception ex)
@@ -116,12 +121,14 @@ public class MongoDBConnector extends BaseDBConnector
             BasicDBObject setQuery = new BasicDBObject("$set", updateFields);
 
             UpdateResult result = db.getCollection(COLLECTION_USERS).updateMany(searchQuery, setQuery);
+
             return result.getModifiedCount() > 0;
         }
         catch (Exception ex)
         {
             plugin.getLogger().log(Level.SEVERE, "Failed to update player record.", ex);
         }
+
         return false;
     }
 
@@ -141,6 +148,7 @@ public class MongoDBConnector extends BaseDBConnector
     public boolean isAlreadyAssignedToOtherPlayer(String walletAddress, Player currentPlayer)
     {
         String playerUUID = currentPlayer.getUniqueId().toString();
+
         try
         {
             return db.getCollection(COLLECTION_USERS)
@@ -150,6 +158,7 @@ public class MongoDBConnector extends BaseDBConnector
         catch (Exception ex)
         {
             plugin.getLogger().log(Level.WARNING, "Failed to check wallet assignment.", ex);
+
             return false;
         }
     }
@@ -174,12 +183,14 @@ public class MongoDBConnector extends BaseDBConnector
                     .append("message",        paymentRecord.message());
 
             db.getCollection(COLLECTION_OFFLINE_PAYS).insertOne(document);
+
             return true;
         }
         catch (Exception ex)
         {
             plugin.getLogger().log(Level.WARNING, "Failed to save offline payment.", ex);
         }
+
         return false;
     }
 
@@ -280,6 +291,200 @@ public class MongoDBConnector extends BaseDBConnector
     }
 
     // -------------------------------------------------------------------------
+    // IDBConnector — bank accounts
+    // -------------------------------------------------------------------------
+
+    @Override
+    public BankRecord getBankRecord(String bankName)
+    {
+        BankRecord cached = bankRecords.get(bankName);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        Document doc = db.getCollection(COLLECTION_BANKS).find(eq("_id", bankName)).first();
+        if (doc != null)
+        {
+            BankRecord record = documentToBankRecord(doc);
+            bankRecords.put(bankName, record);
+            return record;
+        }
+
+        return null;
+    }
+
+    @Override
+    public boolean createBankRecord(BankRecord bank)
+    {
+        try
+        {
+            Document doc = new Document("_id",       bank.getBankName())
+                    .append("address",   bank.getAddress())
+                    .append("ownerUuid", bank.getOwnerUuid())
+                    .append("createdAt", bank.getCreatedAt());
+            db.getCollection(COLLECTION_BANKS).insertOne(doc);
+            bankRecords.put(bank.getBankName(), bank);
+
+            return true;
+        }
+        catch (MongoWriteException ex)
+        {
+            if (ex.getCode() == 11000)
+            {
+                // Duplicate _id — bank already exists (race between bankNameExists and insert).
+                return false;
+            }
+
+            plugin.getLogger().log(Level.SEVERE, "Failed to insert bank record.", ex);
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to insert bank record.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean bankNameExists(String bankName)
+    {
+        if (bankRecords.containsKey(bankName))
+        {
+            return true;
+        }
+
+        return db.getCollection(COLLECTION_BANKS).find(eq("_id", bankName)).first() != null;
+    }
+
+    @Override
+    public boolean deleteBankRecord(String bankName)
+    {
+        try
+        {
+            DeleteResult result = db.getCollection(COLLECTION_BANKS).deleteOne(eq("_id", bankName));
+            db.getCollection(COLLECTION_BANK_MEMBERS).deleteMany(eq("bankName", bankName));
+            bankRecords.remove(bankName);
+            bankMembers.remove(bankName);
+
+            return result.getDeletedCount() > 0;
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to delete bank record.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public List<String> getAllBankNames()
+    {
+        List<String> names = new ArrayList<>();
+
+        for (Document doc : db.getCollection(COLLECTION_BANKS).find())
+        {
+            names.add(doc.getString("_id"));
+        }
+
+        return names;
+    }
+
+    @Override
+    public boolean isBankOwner(String bankName, String playerUuid)
+    {
+        BankRecord bank = getBankRecord(bankName);
+
+        return bank != null && bank.getOwnerUuid().equals(playerUuid);
+    }
+
+    @Override
+    public boolean isBankMember(String bankName, String playerUuid)
+    {
+        // A non-null cache set is a write-through partial view — it can give a
+        // definitive YES (member was added this session) but NOT a definitive NO
+        // (members from a previous server session aren't pre-loaded).
+        Set<String> cached = bankMembers.get(bankName);
+
+        if (cached != null && cached.contains(playerUuid))
+        {
+            return true;
+        }
+
+        boolean isMember = db.getCollection(COLLECTION_BANK_MEMBERS)
+                .find(and(eq("bankName", bankName), eq("playerUuid", playerUuid)))
+                .first() != null;
+
+        if (isMember)
+        {
+            bankMembers.computeIfAbsent(bankName, k -> ConcurrentHashMap.newKeySet())
+                       .add(playerUuid);
+        }
+
+        return isMember;
+    }
+
+    @Override
+    public boolean addBankMember(String bankName, String playerUuid)
+    {
+        try
+        {
+            if (!isBankMember(bankName, playerUuid))
+            {
+                Document doc = new Document("bankName", bankName).append("playerUuid", playerUuid);
+                db.getCollection(COLLECTION_BANK_MEMBERS).insertOne(doc);
+            }
+
+            bankMembers.computeIfAbsent(bankName, k -> ConcurrentHashMap.newKeySet()).add(playerUuid);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to add bank member.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean removeBankMember(String bankName, String playerUuid)
+    {
+        try
+        {
+            DeleteResult result = db.getCollection(COLLECTION_BANK_MEMBERS)
+                    .deleteOne(and(eq("bankName", bankName), eq("playerUuid", playerUuid)));
+
+            if (result.getDeletedCount() > 0)
+            {
+                Set<String> members = bankMembers.get(bankName);
+
+                if (members != null)
+                {
+                    members.remove(playerUuid);
+                }
+
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to remove bank member.", ex);
+        }
+
+        return false;
+    }
+
+    private BankRecord documentToBankRecord(Document doc)
+    {
+        return new BankRecord(
+                doc.getString("_id"),
+                doc.getString("address"),
+                doc.getString("ownerUuid"),
+                doc.getLong("createdAt"));
+    }
+
+    // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
 
@@ -305,6 +510,7 @@ public class MongoDBConnector extends BaseDBConnector
             {
                 this.playerRecords.put(playerUUID, record);
             }
+
             return record;
         }
 
@@ -319,6 +525,7 @@ public class MongoDBConnector extends BaseDBConnector
         }
 
         Document query = new Document("_id", playerUUID.toString());
+
         return db.getCollection(COLLECTION_USERS).find(query).first() != null;
     }
 

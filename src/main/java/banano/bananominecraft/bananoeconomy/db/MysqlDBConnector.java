@@ -1,5 +1,6 @@
 package banano.bananominecraft.bananoeconomy.db;
 
+import banano.bananominecraft.bananoeconomy.classes.BankRecord;
 import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import com.zaxxer.hikari.HikariDataSource;
@@ -9,15 +10,32 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 public class MysqlDBConnector extends BaseDBConnector
 {
     private static final String TABLE_USERS            = "users";
     private static final String TABLE_OFFLINE_PAYMENTS = "offlinepayments";
+    private static final String TABLE_BANKS            = "banks";
+    private static final String TABLE_BANK_MEMBERS     = "bank_members";
+
+    private static final String SQL_CREATE_BANKS =
+            "CREATE TABLE IF NOT EXISTS " + TABLE_BANKS + " (" +
+            "    bank_name   VARCHAR(100) NOT NULL," +
+            "    address     VARCHAR(100) NOT NULL," +
+            "    owner_uuid  VARCHAR(75)  NOT NULL," +
+            "    created_at  BIGINT       NOT NULL," +
+            "    PRIMARY KEY (bank_name)" +
+            ") ENGINE=INNODB";
+
+    private static final String SQL_CREATE_BANK_MEMBERS =
+            "CREATE TABLE IF NOT EXISTS " + TABLE_BANK_MEMBERS + " (" +
+            "    bank_name   VARCHAR(100) NOT NULL," +
+            "    player_uuid VARCHAR(75)  NOT NULL," +
+            "    PRIMARY KEY (bank_name, player_uuid)" +
+            ") ENGINE=INNODB";
 
     private static final String SQL_CREATE_USERS =
             "CREATE TABLE IF NOT EXISTS " + TABLE_USERS + " (" +
@@ -160,6 +178,7 @@ public class MysqlDBConnector extends BaseDBConnector
         {
             plugin.getLogger().log(Level.WARNING, "Failed to check wallet assignment.", ex);
         }
+
         return false;
     }
 
@@ -184,12 +203,14 @@ public class MysqlDBConnector extends BaseDBConnector
             ps.setTimestamp(6, Timestamp.valueOf(paymentRecord.transactionDate()));
 
             ps.executeUpdate();
+
             return true;
         }
         catch (Exception ex)
         {
             plugin.getLogger().log(Level.WARNING, "Failed to save offline payment.", ex);
         }
+
         return false;
     }
 
@@ -246,6 +267,7 @@ public class MysqlDBConnector extends BaseDBConnector
         }
 
         final String sql = "DELETE FROM " + TABLE_OFFLINE_PAYMENTS + " WHERE playerUUID = ?";
+
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql))
         {
@@ -285,6 +307,7 @@ public class MysqlDBConnector extends BaseDBConnector
         {
             plugin.getLogger().log(Level.WARNING, "Failed to sum offline payments.", ex);
         }
+
         return 0;
     }
 
@@ -302,6 +325,287 @@ public class MysqlDBConnector extends BaseDBConnector
     public List<PlayerRecord> getUnfrozenPlayers()
     {
         return queryPlayersByFrozen(false);
+    }
+
+    // -------------------------------------------------------------------------
+    // IDBConnector — bank accounts
+    // -------------------------------------------------------------------------
+
+    @Override
+    public BankRecord getBankRecord(String bankName)
+    {
+        BankRecord cached = bankRecords.get(bankName);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        final String sql = "SELECT bank_name, address, owner_uuid, created_at FROM " + TABLE_BANKS
+                         + " WHERE bank_name = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql))
+        {
+            ps.setString(1, bankName);
+
+            try (ResultSet rs = ps.executeQuery())
+            {
+                if (rs.next())
+                {
+                    BankRecord record = new BankRecord(
+                            rs.getString("bank_name"),
+                            rs.getString("address"),
+                            rs.getString("owner_uuid"),
+                            rs.getLong("created_at"));
+                    bankRecords.put(bankName, record);
+
+                    return record;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to load bank record.", ex);
+        }
+
+        return null;
+    }
+
+    @Override
+    public boolean createBankRecord(BankRecord bank)
+    {
+        final String sql = "INSERT INTO " + TABLE_BANKS
+                         + " (bank_name, address, owner_uuid, created_at) VALUES (?, ?, ?, ?)";
+
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql))
+        {
+            ps.setString(1, bank.getBankName());
+            ps.setString(2, bank.getAddress());
+            ps.setString(3, bank.getOwnerUuid());
+            ps.setLong(4,   bank.getCreatedAt());
+            boolean success = ps.executeUpdate() > 0;
+
+            if (success)
+            {
+                bankRecords.put(bank.getBankName(), bank);
+            }
+
+            return success;
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to insert bank record.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean bankNameExists(String bankName)
+    {
+        if (bankRecords.containsKey(bankName))
+        {
+            return true;
+        }
+
+        final String sql = "SELECT COUNT(bank_name) AS cnt FROM " + TABLE_BANKS + " WHERE bank_name = ?";
+
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql))
+        {
+            ps.setString(1, bankName);
+
+            try (ResultSet rs = ps.executeQuery())
+            {
+                return rs.next() && rs.getInt("cnt") > 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to check bank existence.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean deleteBankRecord(String bankName)
+    {
+        try (Connection conn = getConnection())
+        {
+            conn.setAutoCommit(false);
+
+            try
+            {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "DELETE FROM " + TABLE_BANK_MEMBERS + " WHERE bank_name = ?"))
+                {
+                    ps.setString(1, bankName);
+                    ps.executeUpdate();
+                }
+
+                boolean success;
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "DELETE FROM " + TABLE_BANKS + " WHERE bank_name = ?"))
+                {
+                    ps.setString(1, bankName);
+                    success = ps.executeUpdate() > 0;
+                }
+
+                conn.commit();
+
+                if (success)
+                {
+                    bankRecords.remove(bankName);
+                    bankMembers.remove(bankName);
+                }
+
+                return success;
+            }
+            catch (Exception ex)
+            {
+                conn.rollback();
+                throw ex;
+            }
+            finally
+            {
+                conn.setAutoCommit(true);
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to delete bank record.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public List<String> getAllBankNames()
+    {
+        List<String> names = new ArrayList<>();
+        final String sql = "SELECT bank_name FROM " + TABLE_BANKS;
+
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery())
+        {
+            while (rs.next()) names.add(rs.getString("bank_name"));
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to list banks.", ex);
+        }
+
+        return names;
+    }
+
+    @Override
+    public boolean isBankOwner(String bankName, String playerUuid)
+    {
+        BankRecord bank = getBankRecord(bankName);
+
+        return bank != null && bank.getOwnerUuid().equals(playerUuid);
+    }
+
+    @Override
+    public boolean isBankMember(String bankName, String playerUuid)
+    {
+        // A non-null cache set is a write-through partial view — it can give a
+        // definitive YES (member was added this session) but NOT a definitive NO
+        // (members from a previous server session aren't pre-loaded).
+        Set<String> cached = bankMembers.get(bankName);
+
+        if (cached != null && cached.contains(playerUuid))
+        {
+            return true;
+        }
+
+        final String sql = "SELECT COUNT(*) AS cnt FROM " + TABLE_BANK_MEMBERS
+                         + " WHERE bank_name = ? AND player_uuid = ?";
+
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql))
+        {
+            ps.setString(1, bankName);
+            ps.setString(2, playerUuid);
+
+            try (ResultSet rs = ps.executeQuery())
+            {
+                boolean isMember = rs.next() && rs.getInt("cnt") > 0;
+
+                if (isMember)
+                {
+                    bankMembers.computeIfAbsent(bankName, k -> ConcurrentHashMap.newKeySet())
+                               .add(playerUuid);
+                }
+
+                return isMember;
+            }
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to check bank membership.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean addBankMember(String bankName, String playerUuid)
+    {
+        final String sql = "INSERT IGNORE INTO " + TABLE_BANK_MEMBERS
+                         + " (bank_name, player_uuid) VALUES (?, ?)";
+
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql))
+        {
+            ps.setString(1, bankName);
+            ps.setString(2, playerUuid);
+            ps.executeUpdate();
+            bankMembers.computeIfAbsent(bankName, k -> ConcurrentHashMap.newKeySet()).add(playerUuid);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to add bank member.", ex);
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean removeBankMember(String bankName, String playerUuid)
+    {
+        final String sql = "DELETE FROM " + TABLE_BANK_MEMBERS
+                         + " WHERE bank_name = ? AND player_uuid = ?";
+
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql))
+        {
+            ps.setString(1, bankName);
+            ps.setString(2, playerUuid);
+            boolean success = ps.executeUpdate() > 0;
+
+            if (success)
+            {
+                Set<String> members = bankMembers.get(bankName);
+
+                if (members != null)
+                {
+                    members.remove(playerUuid);
+                }
+            }
+
+            return success;
+        }
+        catch (Exception ex)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to remove bank member.", ex);
+        }
+
+        return false;
     }
 
     // -------------------------------------------------------------------------
@@ -359,6 +663,24 @@ public class MysqlDBConnector extends BaseDBConnector
             {
                 plugin.getLogger().log(Level.SEVERE, "Failed to create '" + TABLE_OFFLINE_PAYMENTS + "' table.", ex);
             }
+
+            try (PreparedStatement ps = conn.prepareStatement(SQL_CREATE_BANKS))
+            {
+                ps.execute();
+            }
+            catch (Exception ex)
+            {
+                plugin.getLogger().log(Level.SEVERE, "Failed to create '" + TABLE_BANKS + "' table.", ex);
+            }
+
+            try (PreparedStatement ps = conn.prepareStatement(SQL_CREATE_BANK_MEMBERS))
+            {
+                ps.execute();
+            }
+            catch (Exception ex)
+            {
+                plugin.getLogger().log(Level.SEVERE, "Failed to create '" + TABLE_BANK_MEMBERS + "' table.", ex);
+            }
         }
         catch (Exception ex)
         {
@@ -405,6 +727,7 @@ public class MysqlDBConnector extends BaseDBConnector
                     {
                         playerRecords.put(playerUUID, record);
                     }
+
                     return record;
                 }
             }
@@ -413,6 +736,7 @@ public class MysqlDBConnector extends BaseDBConnector
         {
             plugin.getLogger().log(Level.SEVERE, "Failed to load player record.", ex);
         }
+
         return null;
     }
 
@@ -439,6 +763,7 @@ public class MysqlDBConnector extends BaseDBConnector
         {
             plugin.getLogger().log(Level.WARNING, "Failed to check player record existence.", ex);
         }
+
         return false;
     }
 
@@ -469,6 +794,7 @@ public class MysqlDBConnector extends BaseDBConnector
         {
             plugin.getLogger().log(Level.WARNING, "Failed to query players by frozen=" + frozen + ".", ex);
         }
+
         return records;
     }
 }

@@ -5,6 +5,7 @@ import banano.bananominecraft.bananoeconomy.classes.TransactionRecord;
 import banano.bananominecraft.bananoeconomy.configuration.ConfigEngine;
 import banano.bananominecraft.bananoeconomy.enums.TransactionDirection;
 import banano.bananominecraft.bananoeconomy.exceptions.TransactionError;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -90,11 +91,15 @@ public class RPC
 
     public String accountCreate(int index)
     {
+        return accountCreate(index, getWalletID());
+    }
+
+    public String accountCreate(int index, String walletId)
+    {
         JsonObject json_payload = new JsonObject();
-        String wallID = getWalletID();
 
         json_payload.addProperty("action", "account_create");
-        json_payload.addProperty("wallet", wallID);
+        json_payload.addProperty("wallet", walletId);
 
         if (index != -1)
         {
@@ -135,6 +140,17 @@ public class RPC
 
     public String sendTransaction(String sender, String recipient, double value) throws TransactionError
     {
+        return sendTransaction(sender, recipient, value, getWalletID());
+    }
+
+    /**
+     * Sends a Banano transaction, signing with the specified wallet.
+     *
+     * @param walletId the node wallet ID whose seed controls the {@code sender} account
+     */
+    public String sendTransaction(String sender, String recipient, double value, String walletId)
+            throws TransactionError
+    {
         if (value <= 0)
         {
             throw new TransactionError("Transaction amount must be greater than zero.");
@@ -146,13 +162,12 @@ public class RPC
         }
 
         final JsonObject json_payload = new JsonObject();
-        final String walletID = getWalletID();
 
-        json_payload.addProperty("action", "send");
-        json_payload.addProperty("wallet", walletID);
-        json_payload.addProperty("source", sender);
+        json_payload.addProperty("action",      "send");
+        json_payload.addProperty("wallet",      walletId);
+        json_payload.addProperty("source",      sender);
         json_payload.addProperty("destination", recipient);
-        json_payload.addProperty("amount", toRaw(value));
+        json_payload.addProperty("amount",      toRaw(value));
 
         final JsonElement accountJson;
 
@@ -167,7 +182,7 @@ public class RPC
             throw new TransactionError("Send transaction failed");
         }
 
-        final JsonObject json = accountJson.getAsJsonObject();
+        final JsonObject json  = accountJson.getAsJsonObject();
         final JsonElement error = json.get("error");
         if (error != null)
         {
@@ -178,6 +193,124 @@ public class RPC
                 .ofNullable(json.get("block"))
                 .map(JsonElement::getAsString)
                 .orElseThrow(() -> new TransactionError("Send transaction resulted in missing block"));
+    }
+
+    /**
+     * Changes the representative of {@code account}, signing with the specified wallet.
+     *
+     * @param walletId the node wallet ID whose seed controls the {@code account}
+     * @return the resulting block hash
+     */
+    public String setRepresentative(String account, String representative, String walletId) throws TransactionError
+    {
+        if (!Validator.validateAddress(account) || !Validator.validateAddress(representative))
+        {
+            throw new TransactionError("Invalid address for account or representative.");
+        }
+
+        final JsonObject json_payload = new JsonObject();
+
+        json_payload.addProperty("action",         "account_representative_set");
+        json_payload.addProperty("wallet",         walletId);
+        json_payload.addProperty("account",        account);
+        json_payload.addProperty("representative", representative);
+
+        final JsonElement responseJson;
+
+        try
+        {
+            final String response = sendPost(json_payload.toString());
+            responseJson = JsonParser.parseString(response);
+        }
+        catch (final Exception e)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to setRepresentative.", e);
+            throw new TransactionError("Set representative failed");
+        }
+
+        final JsonObject json  = responseJson.getAsJsonObject();
+        final JsonElement error = json.get("error");
+        if (error != null)
+        {
+            throw new TransactionError(error.getAsString());
+        }
+
+        return Optional
+                .ofNullable(json.get("block"))
+                .map(JsonElement::getAsString)
+                .orElseThrow(() -> new TransactionError("Set representative resulted in missing block"));
+    }
+
+    /**
+     * Returns the addresses of representatives the node currently sees as online/voting.
+     * Returns an empty list (rather than throwing) on any RPC or parsing failure, since callers
+     * use this as one candidate source among possibly others (e.g. an admin-curated list).
+     */
+    public List<String> representativesOnline()
+    {
+        final JsonObject json_payload = new JsonObject();
+        json_payload.addProperty("action", "representatives_online");
+
+        try
+        {
+            String response = sendPost(json_payload.toString());
+            JsonElement responseJson = JsonParser.parseString(response);
+            JsonArray repsArray = responseJson.getAsJsonObject().getAsJsonArray("representatives");
+
+            if (repsArray == null)
+            {
+                return Collections.emptyList();
+            }
+
+            List<String> representatives = new ArrayList<>();
+
+            for (JsonElement element : repsArray)
+            {
+                representatives.add(element.getAsString());
+            }
+
+            return representatives;
+        }
+        catch (Exception e)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to retrieve online representatives.", e);
+        }
+
+        return Collections.emptyList();
+    }
+
+    /**
+     * Returns the current representative address for {@code account}, or {@code null} if it
+     * could not be determined (account not found, or any RPC/parsing failure).
+     */
+    public String getRepresentative(String account)
+    {
+        final JsonObject json_payload = new JsonObject();
+        json_payload.addProperty("action", "account_representative");
+        json_payload.addProperty("account", account);
+
+        try
+        {
+            String response = sendPost(json_payload.toString());
+            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+            JsonElement error = json.get("error");
+
+            if (error != null)
+            {
+                plugin.getLogger().warning(
+                        "Failed to retrieve representative for account " + account + ": " + error.getAsString());
+                return null;
+            }
+
+            JsonElement representative = json.get("representative");
+            return representative != null ? representative.getAsString() : null;
+        }
+        catch (Exception e)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to retrieve representative for account: " + account, e);
+        }
+
+        return null;
     }
 
     public Double getBalance(String account)
@@ -403,6 +536,73 @@ public class RPC
         catch (Exception e)
         {
             plugin.getLogger().log(Level.SEVERE, "walletCreate failed.", e);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bank wallet lifecycle
+    // -------------------------------------------------------------------------
+
+    public Boolean bankWalletExists()
+    {
+        final String bankWalletId = configEngine.getBankWalletId();
+        if (bankWalletId == null || bankWalletId.isEmpty())
+        {
+            return false;
+        }
+
+        final JsonObject json_payload = new JsonObject();
+        json_payload.addProperty("action", "wallet_balances");
+        json_payload.addProperty("wallet", bankWalletId);
+
+        try
+        {
+            JsonElement existsJson = JsonParser.parseString(sendPost(json_payload.toString()));
+            try
+            {
+                String error = existsJson.getAsJsonObject().get("error").getAsString();
+                if (error.equals("Wallet not found") || error.equals("Bad wallet number"))
+                {
+                    return false;
+                }
+                else
+                {
+                    plugin.getLogger().warning("Unexpected bank wallet_balances error: " + error);
+                }
+            }
+            catch (Exception e)
+            {
+                plugin.getLogger().info("Bank wallet found.");
+            }
+        }
+        catch (Exception e)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to check bank wallet existence.", e);
+        }
+        return true;
+    }
+
+    public void bankWalletCreate()
+    {
+        String seed = configEngine.getBankWalletSeed();
+
+        final JsonObject json_payload = new JsonObject();
+        json_payload.addProperty("action", "wallet_create");
+        json_payload.addProperty("seed",   seed);
+
+        try
+        {
+            JsonElement blocksJson = JsonParser.parseString(sendPost(json_payload.toString()));
+            String walletId = blocksJson.getAsJsonObject().get("wallet").getAsString();
+
+            plugin.getLogger().info("Bank wallet ID generated: " + walletId);
+
+            configEngine.setBankWalletId(walletId);
+            configEngine.save();
+        }
+        catch (Exception e)
+        {
+            plugin.getLogger().log(Level.SEVERE, "bankWalletCreate failed.", e);
         }
     }
 }

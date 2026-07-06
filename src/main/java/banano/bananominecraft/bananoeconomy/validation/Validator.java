@@ -19,6 +19,7 @@ public class Validator
         {
             return false;
         }
+
         return BAN_ADDRESS_PATTERN.matcher(accountAddress).find();
     }
 }

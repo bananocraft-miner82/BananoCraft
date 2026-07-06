@@ -17,6 +17,13 @@ import java.nio.charset.StandardCharsets;
  */
 public class HttpUrlConnectionTransport implements HttpTransport
 {
+    // HttpURLConnection defaults both timeouts to 0 (infinite) unless set explicitly. Now that
+    // EconomyFuncs serializes deposits/withdrawals behind a lock, an unbounded hang here would
+    // stall every other queued transaction indefinitely instead of just its own caller - so this
+    // caps the worst case rather than leaving it open-ended.
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
+    private static final int READ_TIMEOUT_MS = 15_000;
+
     @Override
     public String post(String url, String jsonPayload) throws IOException
     {
@@ -24,6 +31,8 @@ public class HttpUrlConnectionTransport implements HttpTransport
         con.setRequestMethod("POST");
         con.setRequestProperty("Content-Type", "application/json; utf-8");
         con.setRequestProperty("Accept", "application/json");
+        con.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        con.setReadTimeout(READ_TIMEOUT_MS);
         con.setDoOutput(true);
 
         // Write request — let the exception propagate so callers don't attempt

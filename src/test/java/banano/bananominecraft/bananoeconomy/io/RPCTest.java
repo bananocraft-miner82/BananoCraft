@@ -168,6 +168,110 @@ class RPCTest
     }
 
     // -------------------------------------------------------------------------
+    // setRepresentative
+    // -------------------------------------------------------------------------
+
+    @Test
+    void setRepresentative_returnsBlockHash_onSuccess() throws Exception
+    {
+        stubResponse("{\"block\":\"REP123\"}");
+        assertEquals("REP123", rpc.setRepresentative(SENDER, RECIPIENT, "WALLET_ID"));
+    }
+
+    @Test
+    void setRepresentative_throws_whenAddressInvalid()
+    {
+        assertThrows(TransactionError.class,
+                () -> rpc.setRepresentative("not-an-address", RECIPIENT, "WALLET_ID"));
+        assertThrows(TransactionError.class,
+                () -> rpc.setRepresentative(SENDER, "not-an-address", "WALLET_ID"));
+    }
+
+    @Test
+    void setRepresentative_throws_onTransportFailure() throws Exception
+    {
+        stubFailure();
+        TransactionError ex = assertThrows(TransactionError.class,
+                () -> rpc.setRepresentative(SENDER, RECIPIENT, "WALLET_ID"));
+        assertEquals("Set representative failed", ex.getMessage());
+    }
+
+    @Test
+    void setRepresentative_throws_whenNodeReturnsError() throws Exception
+    {
+        stubResponse("{\"error\":\"Representative not found\"}");
+        TransactionError ex = assertThrows(TransactionError.class,
+                () -> rpc.setRepresentative(SENDER, RECIPIENT, "WALLET_ID"));
+        assertEquals("Representative not found", ex.getMessage());
+    }
+
+    @Test
+    void setRepresentative_throws_whenBlockMissing() throws Exception
+    {
+        stubResponse("{\"something\":\"else\"}");
+        TransactionError ex = assertThrows(TransactionError.class,
+                () -> rpc.setRepresentative(SENDER, RECIPIENT, "WALLET_ID"));
+        assertTrue(ex.getMessage().toLowerCase().contains("missing block"));
+    }
+
+    // -------------------------------------------------------------------------
+    // representativesOnline
+    // -------------------------------------------------------------------------
+
+    @Test
+    void representativesOnline_returnsAddresses_onSuccess() throws Exception
+    {
+        stubResponse("{\"representatives\":[\"" + SENDER + "\",\"" + RECIPIENT + "\"]}");
+        assertEquals(List.of(SENDER, RECIPIENT), rpc.representativesOnline());
+    }
+
+    @Test
+    void representativesOnline_returnsEmpty_whenKeyMissing() throws Exception
+    {
+        stubResponse("{}");
+        assertTrue(rpc.representativesOnline().isEmpty());
+    }
+
+    @Test
+    void representativesOnline_returnsEmpty_onTransportFailure() throws Exception
+    {
+        stubFailure();
+        assertTrue(rpc.representativesOnline().isEmpty());
+    }
+
+    // -------------------------------------------------------------------------
+    // getRepresentative
+    // -------------------------------------------------------------------------
+
+    @Test
+    void getRepresentative_returnsAddress_onSuccess() throws Exception
+    {
+        stubResponse("{\"representative\":\"" + RECIPIENT + "\"}");
+        assertEquals(RECIPIENT, rpc.getRepresentative(SENDER));
+    }
+
+    @Test
+    void getRepresentative_returnsNull_whenAccountNotFound() throws Exception
+    {
+        stubResponse("{\"error\":\"Account not found\"}");
+        assertNull(rpc.getRepresentative(SENDER));
+    }
+
+    @Test
+    void getRepresentative_returnsNull_whenRepresentativeKeyMissing() throws Exception
+    {
+        stubResponse("{}");
+        assertNull(rpc.getRepresentative(SENDER));
+    }
+
+    @Test
+    void getRepresentative_returnsNull_onTransportFailure() throws Exception
+    {
+        stubFailure();
+        assertNull(rpc.getRepresentative(SENDER));
+    }
+
+    // -------------------------------------------------------------------------
     // getBalance
     // -------------------------------------------------------------------------
 

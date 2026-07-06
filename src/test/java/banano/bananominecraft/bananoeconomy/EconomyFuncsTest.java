@@ -20,9 +20,17 @@ import org.mockito.quality.Strictness;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -543,5 +551,163 @@ class EconomyFuncsTest {
     void accountExists_returnsFalse_whenDBHasNoRecord() {
         when(db.hasPlayerRecord(player)).thenReturn(false);
         assertFalse(economyFuncs.accountExists(player));
+    }
+
+    // --- Concurrency: addBalanceTP/removeBalanceFP must serialize sends against the same account ---
+
+    @Test
+    void addBalanceTP_concurrentCallsForDifferentPlayers_neverSendConcurrently() throws Exception {
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+        when(rpc.getBalance(MASTER_WALLET)).thenReturn(1000.0);
+
+        OfflinePlayer playerA = mock(OfflinePlayer.class);
+        OfflinePlayer playerB = mock(OfflinePlayer.class);
+        String walletA = WALLET;
+        String walletB = "ban_1differentwalletaddressxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2222";
+        when(db.getOfflinePlayerRecord(playerA)).thenReturn(new PlayerRecord(UUID.randomUUID().toString(), "Alice", walletA, false));
+        when(db.getOfflinePlayerRecord(playerB)).thenReturn(new PlayerRecord(UUID.randomUUID().toString(), "Bob", walletB, false));
+
+        AtomicInteger concurrent = new AtomicInteger(0);
+        AtomicInteger maxConcurrent = new AtomicInteger(0);
+
+        when(rpc.sendTransaction(eq(MASTER_WALLET), anyString(), anyDouble())).thenAnswer(invocation -> {
+            int current = concurrent.incrementAndGet();
+            maxConcurrent.updateAndGet(prev -> Math.max(prev, current));
+            Thread.sleep(75);
+            concurrent.decrementAndGet();
+            return "block";
+        });
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+
+        Callable<Boolean> taskA = () -> {
+            ready.countDown();
+            go.await();
+            return economyFuncs.addBalanceTP(playerA, 5.0);
+        };
+        Callable<Boolean> taskB = () -> {
+            ready.countDown();
+            go.await();
+            return economyFuncs.addBalanceTP(playerB, 5.0);
+        };
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<Boolean> futureA = pool.submit(taskA);
+        Future<Boolean> futureB = pool.submit(taskB);
+
+        ready.await();
+        go.countDown();
+
+        assertTrue(futureA.get(5, TimeUnit.SECONDS));
+        assertTrue(futureB.get(5, TimeUnit.SECONDS));
+        pool.shutdown();
+
+        assertEquals(1, maxConcurrent.get(),
+                "addBalanceTP must never allow two concurrent sends from the shared master wallet, even for different recipients");
+    }
+
+    @Test
+    void removeBalanceFP_concurrentCallsForSameWallet_neverSendConcurrently() throws Exception {
+        OfflinePlayer playerA = mock(OfflinePlayer.class);
+        OfflinePlayer playerB = mock(OfflinePlayer.class);
+        // Same wallet for both callers - simulates the same underlying account being hit twice at once.
+        when(db.getOfflinePlayerRecord(playerA)).thenReturn(new PlayerRecord(UUID.randomUUID().toString(), "Alice", WALLET, false));
+        when(db.getOfflinePlayerRecord(playerB)).thenReturn(new PlayerRecord(UUID.randomUUID().toString(), "Alice2", WALLET, false));
+        when(rpc.getBalance(WALLET)).thenReturn(1000.0);
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+
+        AtomicInteger concurrent = new AtomicInteger(0);
+        AtomicInteger maxConcurrent = new AtomicInteger(0);
+
+        when(rpc.sendTransaction(eq(WALLET), eq(MASTER_WALLET), anyDouble())).thenAnswer(invocation -> {
+            int current = concurrent.incrementAndGet();
+            maxConcurrent.updateAndGet(prev -> Math.max(prev, current));
+            Thread.sleep(75);
+            concurrent.decrementAndGet();
+            return "block";
+        });
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+
+        Callable<Boolean> taskA = () -> {
+            ready.countDown();
+            go.await();
+            return economyFuncs.removeBalanceFP(playerA, 5.0);
+        };
+        Callable<Boolean> taskB = () -> {
+            ready.countDown();
+            go.await();
+            return economyFuncs.removeBalanceFP(playerB, 5.0);
+        };
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<Boolean> futureA = pool.submit(taskA);
+        Future<Boolean> futureB = pool.submit(taskB);
+
+        ready.await();
+        go.countDown();
+
+        assertTrue(futureA.get(5, TimeUnit.SECONDS));
+        assertTrue(futureB.get(5, TimeUnit.SECONDS));
+        pool.shutdown();
+
+        assertEquals(1, maxConcurrent.get(), "removeBalanceFP must serialize concurrent sends from the same wallet");
+    }
+
+    @Test
+    void removeBalanceFP_concurrentCallsForDifferentWallets_areNotSerializedAgainstEachOther() throws Exception {
+        OfflinePlayer playerA = mock(OfflinePlayer.class);
+        OfflinePlayer playerB = mock(OfflinePlayer.class);
+        String walletA = WALLET;
+        String walletB = "ban_1differentwalletaddressxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx2222";
+        when(db.getOfflinePlayerRecord(playerA)).thenReturn(new PlayerRecord(UUID.randomUUID().toString(), "Alice", walletA, false));
+        when(db.getOfflinePlayerRecord(playerB)).thenReturn(new PlayerRecord(UUID.randomUUID().toString(), "Bob", walletB, false));
+        when(rpc.getBalance(walletA)).thenReturn(1000.0);
+        when(rpc.getBalance(walletB)).thenReturn(1000.0);
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+
+        AtomicInteger concurrent = new AtomicInteger(0);
+        AtomicInteger maxConcurrent = new AtomicInteger(0);
+        CountDownLatch bothEntered = new CountDownLatch(2);
+
+        when(rpc.sendTransaction(anyString(), eq(MASTER_WALLET), anyDouble())).thenAnswer(invocation -> {
+            int current = concurrent.incrementAndGet();
+            maxConcurrent.updateAndGet(prev -> Math.max(prev, current));
+            bothEntered.countDown();
+            // Give the other thread a real chance to overlap before releasing this one.
+            bothEntered.await(2, TimeUnit.SECONDS);
+            concurrent.decrementAndGet();
+            return "block";
+        });
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+
+        Callable<Boolean> taskA = () -> {
+            ready.countDown();
+            go.await();
+            return economyFuncs.removeBalanceFP(playerA, 5.0);
+        };
+        Callable<Boolean> taskB = () -> {
+            ready.countDown();
+            go.await();
+            return economyFuncs.removeBalanceFP(playerB, 5.0);
+        };
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<Boolean> futureA = pool.submit(taskA);
+        Future<Boolean> futureB = pool.submit(taskB);
+
+        ready.await();
+        go.countDown();
+
+        assertTrue(futureA.get(5, TimeUnit.SECONDS));
+        assertTrue(futureB.get(5, TimeUnit.SECONDS));
+        pool.shutdown();
+
+        assertEquals(2, maxConcurrent.get(),
+                "Different wallets are independent accounts and must not be serialized against each other");
     }
 }

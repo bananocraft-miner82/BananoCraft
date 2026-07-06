@@ -13,6 +13,8 @@ import org.bukkit.plugin.Plugin;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 
 public class EconomyFuncs
@@ -25,12 +27,30 @@ public class EconomyFuncs
     private final RPC rpc;
     private final ConfigEngine configEngine;
 
+    // Every deposit sends from this single master-wallet account, and Banano (like other
+    // Nano-family chains) requires strictly sequential blocks per account. Without this lock,
+    // concurrent deposits (e.g. a player redeeming several vouchers in quick succession) race:
+    // each reads the same stale master-wallet balance and fires its own send, so the checks and
+    // sends interleave incorrectly. Fair (FIFO) so concurrent callers are served in arrival order.
+    private final ReentrantLock masterWalletLock = new ReentrantLock(true);
+
+    // Withdrawals send from the player's own wallet, so different players' withdrawals are
+    // independent accounts and don't need to wait on each other - only the same wallet's own
+    // concurrent withdrawals do. One lock per wallet address, created lazily.
+    private final ConcurrentHashMap<String, ReentrantLock> walletLocks = new ConcurrentHashMap<>();
+
     public EconomyFuncs(Plugin plugin, IDBConnector db, RPC rpc, ConfigEngine configEngine)
     {
         this.plugin = plugin;
         this.db = db;
         this.rpc = rpc;
         this.configEngine = configEngine;
+    }
+
+    /** Returns the (lazily created) lock serializing sends from the given wallet address. */
+    private ReentrantLock lockForWallet(String wallet)
+    {
+        return this.walletLocks.computeIfAbsent(wallet, key -> new ReentrantLock(true));
     }
 
     public boolean freezePlayer(Player player)
@@ -63,6 +83,7 @@ public class EconomyFuncs
         {
             playerRecord.setFrozen(true);
             this.db.updatePlayerRecord(playerRecord);
+
             return true;
         }
 
@@ -129,6 +150,7 @@ public class EconomyFuncs
         {
             playerRecord.setFrozen(false);
             this.db.updatePlayerRecord(playerRecord);
+
             return true;
         }
 
@@ -238,45 +260,64 @@ public class EconomyFuncs
             return false;
         }
 
-        double balance = rpc.getBalance(playerRecord.getWallet());
-
-        if (balance - amount < 0)
-        {
-            return false;
-        }
+        ReentrantLock lock = lockForWallet(playerRecord.getWallet());
+        lock.lock();
 
         try
         {
-            rpc.sendTransaction(playerRecord.getWallet(), rpc.getMasterWallet(), amount);
-            return true;
+            double balance = rpc.getBalance(playerRecord.getWallet());
+
+            if (balance - amount < 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                rpc.sendTransaction(playerRecord.getWallet(), rpc.getMasterWallet(), amount);
+                return true;
+            }
+            catch (Exception e)
+            {
+                plugin.getLogger().log(Level.WARNING, "removeBalanceFP failed for offline player.", e);
+                return false;
+            }
         }
-        catch (Exception e)
+        finally
         {
-            plugin.getLogger().log(Level.WARNING, "removeBalanceFP failed for offline player.", e);
-            return false;
+            lock.unlock();
         }
     }
 
     public boolean addBalanceTP(OfflinePlayer player, double amount)
     {
-        String sender = rpc.getMasterWallet();
-        double serverBalance = rpc.getBalance(sender);
-        PlayerRecord playerRecord = this.db.getOfflinePlayerRecord(player);
-
-        if (playerRecord == null || serverBalance - amount < 0 || playerRecord.isFrozen())
-        {
-            return false;
-        }
+        this.masterWalletLock.lock();
 
         try
         {
-            rpc.sendTransaction(sender, playerRecord.getWallet(), amount);
-            return true;
+            String sender = rpc.getMasterWallet();
+            double serverBalance = rpc.getBalance(sender);
+            PlayerRecord playerRecord = this.db.getOfflinePlayerRecord(player);
+
+            if (playerRecord == null || serverBalance - amount < 0 || playerRecord.isFrozen())
+            {
+                return false;
+            }
+
+            try
+            {
+                rpc.sendTransaction(sender, playerRecord.getWallet(), amount);
+                return true;
+            }
+            catch (Exception e)
+            {
+                plugin.getLogger().log(Level.WARNING, "addBalanceTP failed for offline player.", e);
+                return false;
+            }
         }
-        catch (Exception e)
+        finally
         {
-            plugin.getLogger().log(Level.WARNING, "addBalanceTP failed for offline player.", e);
-            return false;
+            this.masterWalletLock.unlock();
         }
     }
 
@@ -357,49 +398,74 @@ public class EconomyFuncs
     public boolean removeBalanceFP(Player player, double amount)
     {
         // PLAYER TO MASTER WALLET
-        double balance = getBalance(player);
         PlayerRecord playerRecord = this.db.getPlayerRecord(player);
 
-        if (playerRecord == null || balance - amount < 0 || playerRecord.isFrozen())
+        if (playerRecord == null || playerRecord.isFrozen())
         {
             return false;
         }
+
+        ReentrantLock lock = lockForWallet(playerRecord.getWallet());
+        lock.lock();
 
         try
         {
-            String sender = playerRecord.getWallet();
-            rpc.sendTransaction(sender, rpc.getMasterWallet(), amount);
-            return true;
+            double balance = getBalance(player);
+
+            if (balance - amount < 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                String sender = playerRecord.getWallet();
+                rpc.sendTransaction(sender, rpc.getMasterWallet(), amount);
+                return true;
+            }
+            catch (Exception e)
+            {
+                plugin.getLogger().log(Level.WARNING, "removeBalanceFP failed for player.", e);
+                return false;
+            }
         }
-        catch (Exception e)
+        finally
         {
-            plugin.getLogger().log(Level.WARNING, "removeBalanceFP failed for player.", e);
-            return false;
+            lock.unlock();
         }
     }
 
     public boolean addBalanceTP(Player player, double amount)
     {
         // MASTER WALLET TO PLAYER
-        String sender = rpc.getMasterWallet();
-        double serverBalance = rpc.getBalance(sender);
-        PlayerRecord playerRecord = this.db.getPlayerRecord(player);
-
-        if (playerRecord == null || serverBalance - amount < 0 || isFrozen(player))
-        {
-            return false;
-        }
+        this.masterWalletLock.lock();
 
         try
         {
-            String playerWallet = playerRecord.getWallet();
-            rpc.sendTransaction(sender, playerWallet, amount);
-            return true;
+            String sender = rpc.getMasterWallet();
+            double serverBalance = rpc.getBalance(sender);
+            PlayerRecord playerRecord = this.db.getPlayerRecord(player);
+
+            if (playerRecord == null || serverBalance - amount < 0 || isFrozen(player))
+            {
+                return false;
+            }
+
+            try
+            {
+                String playerWallet = playerRecord.getWallet();
+                rpc.sendTransaction(sender, playerWallet, amount);
+                return true;
+            }
+            catch (Exception e)
+            {
+                plugin.getLogger().log(Level.WARNING, "addBalanceTP failed for player.", e);
+                return false;
+            }
         }
-        catch (Exception e)
+        finally
         {
-            plugin.getLogger().log(Level.WARNING, "addBalanceTP failed for player.", e);
-            return false;
+            this.masterWalletLock.unlock();
         }
     }
 

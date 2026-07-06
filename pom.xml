@@ -89,6 +89,33 @@
                 </executions>
             </plugin>
             <plugin>
+                <!-- Publishes a small, dependency-free "api" classifier jar containing only
+                     the banano.bananominecraft.bananoeconomy.api package, so other plugins can
+                     compile against BananoWalletService without pulling in this plugin's full
+                     shaded dependency tree (mirrors how this project itself depends on the slim
+                     VaultAPI artifact rather than all of Vault). -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.1</version>
+                <executions>
+                    <execution>
+                        <id>api-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>api</classifier>
+                            <includes>
+                                <include>banano/bananominecraft/bananoeconomy/api/BananoWalletService.class</include>
+                                <include>banano/bananominecraft/bananoeconomy/api/BananoWalletService$SendResult.class</include>
+                                <include>banano/bananominecraft/bananoeconomy/api/BananoWalletService$RepresentativeResult.class</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.6.0</version>

@@ -44,6 +44,13 @@ commands:
     aliases: [showofflinepayments, showofflinetransactions]
     description: Displays the details of the changed transactions while the player was offline.
 
+  representative:
+    aliases: [rep]
+    description: Manage your account's representative
+    usage: /<command> <set <ban_address|random>|get>
+    permission: BananoEconomy.representative
+    permission-message: You do not have /<permission>
+
 permissions:
   BananoEconomy.nodeinfo.ip:
     description: This permission allows users to see the node IP with the nodeinfo command
@@ -51,5 +58,8 @@ permissions:
   BananoEconomy.admin:
     description: Access to the BananoCraft economy admin commands.
     default: op
+  BananoEconomy.representative:
+    description: Access to the /representative command.
+    default: true
 
 

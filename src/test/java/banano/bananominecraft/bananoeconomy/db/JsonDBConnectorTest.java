@@ -1,5 +1,6 @@
 package banano.bananominecraft.bananoeconomy.db;
 
+import banano.bananominecraft.bananoeconomy.classes.BankRecord;
 import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import org.junit.jupiter.api.AfterEach;
@@ -134,5 +135,250 @@ class JsonDBConnectorTest
     {
         assertEquals(0.0, db.getOfflinePaymentsTotal(null));
         assertTrue(db.getOfflinePaymentRecords(null).isEmpty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Bank records
+    // -------------------------------------------------------------------------
+
+    private static final String BANK_NAME  = "treasury";
+    private static final String BANK_ADDR  = "ban_3bankaddress1111111111111111111111111111111111111111111111111";
+    private static final String OWNER_UUID = "00000000-0000-0000-0000-000000000001";
+    private static final String OTHER_UUID = "00000000-0000-0000-0000-000000000002";
+
+    private BankRecord makeBank()
+    {
+        return new BankRecord(BANK_NAME, BANK_ADDR, OWNER_UUID, 1_000_000L);
+    }
+
+    @Test
+    void createBankRecord_isRetrievable()
+    {
+        assertTrue(db.createBankRecord(makeBank()));
+
+        assertTrue(db.bankNameExists(BANK_NAME));
+
+        BankRecord loaded = db.getBankRecord(BANK_NAME);
+        assertNotNull(loaded);
+        assertEquals(BANK_NAME,  loaded.getBankName());
+        assertEquals(BANK_ADDR,  loaded.getAddress());
+        assertEquals(OWNER_UUID, loaded.getOwnerUuid());
+    }
+
+    @Test
+    void createBankRecord_isIdempotent()
+    {
+        assertTrue(db.createBankRecord(makeBank()));
+        // Second call with the same name must fail — no overwrite.
+        assertFalse(db.createBankRecord(new BankRecord(BANK_NAME, "ban_other", OTHER_UUID, 2_000_000L)));
+
+        assertEquals(BANK_ADDR, db.getBankRecord(BANK_NAME).getAddress());
+    }
+
+    @Test
+    void bankNameExists_falseWhenAbsent()
+    {
+        assertFalse(db.bankNameExists(BANK_NAME));
+    }
+
+    @Test
+    void getBankRecord_returnsNull_whenAbsent()
+    {
+        assertNull(db.getBankRecord(BANK_NAME));
+    }
+
+    @Test
+    void getAllBankNames_returnsAll()
+    {
+        db.createBankRecord(makeBank());
+        db.createBankRecord(new BankRecord("guild", "ban_3guild111111111111111111111111111111111111111111111111111111", OTHER_UUID, 0));
+
+        List<String> names = db.getAllBankNames();
+        assertEquals(2, names.size());
+        assertTrue(names.contains(BANK_NAME));
+        assertTrue(names.contains("guild"));
+    }
+
+    @Test
+    void getAllBankNames_emptyWhenNoBanks()
+    {
+        assertTrue(db.getAllBankNames().isEmpty());
+    }
+
+    @Test
+    void deleteBankRecord_removesRecord()
+    {
+        db.createBankRecord(makeBank());
+
+        assertTrue(db.deleteBankRecord(BANK_NAME));
+
+        assertFalse(db.bankNameExists(BANK_NAME));
+        assertNull(db.getBankRecord(BANK_NAME));
+    }
+
+    @Test
+    void deleteBankRecord_returnsFalse_whenNotFound()
+    {
+        assertFalse(db.deleteBankRecord("nonexistent"));
+    }
+
+    @Test
+    void deleteBankRecord_alsoRemovesMembers()
+    {
+        db.createBankRecord(makeBank());
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+        db.addBankMember(BANK_NAME, OTHER_UUID);
+
+        db.deleteBankRecord(BANK_NAME);
+
+        assertFalse(db.isBankMember(BANK_NAME, OWNER_UUID));
+        assertFalse(db.isBankMember(BANK_NAME, OTHER_UUID));
+    }
+
+    // -------------------------------------------------------------------------
+    // Bank members
+    // -------------------------------------------------------------------------
+
+    @Test
+    void addBankMember_isRetrievable()
+    {
+        db.createBankRecord(makeBank());
+        assertTrue(db.addBankMember(BANK_NAME, OWNER_UUID));
+
+        assertTrue(db.isBankMember(BANK_NAME, OWNER_UUID));
+    }
+
+    @Test
+    void addBankMember_isIdempotent()
+    {
+        db.createBankRecord(makeBank());
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+        db.addBankMember(BANK_NAME, OWNER_UUID); // duplicate — must not throw or double-add
+
+        assertTrue(db.isBankMember(BANK_NAME, OWNER_UUID));
+    }
+
+    @Test
+    void isBankMember_falseWhenNotAdded()
+    {
+        db.createBankRecord(makeBank());
+        assertFalse(db.isBankMember(BANK_NAME, OWNER_UUID));
+    }
+
+    @Test
+    void removeBankMember_removesFromSet()
+    {
+        db.createBankRecord(makeBank());
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+        db.addBankMember(BANK_NAME, OTHER_UUID);
+
+        assertTrue(db.removeBankMember(BANK_NAME, OWNER_UUID));
+
+        assertFalse(db.isBankMember(BANK_NAME, OWNER_UUID));
+        assertTrue(db.isBankMember(BANK_NAME, OTHER_UUID)); // unaffected
+    }
+
+    @Test
+    void removeBankMember_returnsFalse_whenNotMember()
+    {
+        db.createBankRecord(makeBank());
+        assertFalse(db.removeBankMember(BANK_NAME, OWNER_UUID));
+    }
+
+    @Test
+    void members_isolatedPerBank()
+    {
+        db.createBankRecord(makeBank());
+        db.createBankRecord(new BankRecord("guild", "ban_3guild111111111111111111111111111111111111111111111111111111", OTHER_UUID, 0));
+
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+
+        assertTrue(db.isBankMember(BANK_NAME, OWNER_UUID));
+        assertFalse(db.isBankMember("guild", OWNER_UUID)); // not a member of the other bank
+    }
+
+    // -------------------------------------------------------------------------
+    // isBankOwner
+    // -------------------------------------------------------------------------
+
+    @Test
+    void isBankOwner_trueForOwnerUuid()
+    {
+        db.createBankRecord(makeBank());
+        assertTrue(db.isBankOwner(BANK_NAME, OWNER_UUID));
+    }
+
+    @Test
+    void isBankOwner_falseForNonOwner()
+    {
+        db.createBankRecord(makeBank());
+        assertFalse(db.isBankOwner(BANK_NAME, OTHER_UUID));
+    }
+
+    @Test
+    void isBankOwner_falseWhenBankAbsent()
+    {
+        assertFalse(db.isBankOwner(BANK_NAME, OWNER_UUID));
+    }
+
+    // -------------------------------------------------------------------------
+    // JSON persistence across connector instances
+    // -------------------------------------------------------------------------
+
+    @Test
+    void bankRecord_persistsAcrossConnectorInstances()
+    {
+        db.createBankRecord(makeBank());
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+
+        // Fresh connector must load banks.json and bank_members.json from disk.
+        JsonDBConnector reopened = new JsonDBConnector(plugin);
+
+        assertTrue(reopened.bankNameExists(BANK_NAME));
+        assertEquals(BANK_ADDR, reopened.getBankRecord(BANK_NAME).getAddress());
+        assertTrue(reopened.isBankMember(BANK_NAME, OWNER_UUID));
+
+        reopened.close();
+    }
+
+    @Test
+    void bankDeletion_persistsAcrossConnectorInstances()
+    {
+        db.createBankRecord(makeBank());
+        db.deleteBankRecord(BANK_NAME);
+
+        JsonDBConnector reopened = new JsonDBConnector(plugin);
+        assertFalse(reopened.bankNameExists(BANK_NAME));
+        reopened.close();
+    }
+
+    @Test
+    void isBankMember_trueForMemberAddedBeforeOtherMember()
+    {
+        // Regression: partial-cache bug where adding member B causes the cache set
+        // to become non-null, so a subsequent isBankMember check for member A
+        // (already in the set from loadBankMembers) incorrectly returned false.
+        db.createBankRecord(makeBank());
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+        db.addBankMember(BANK_NAME, OTHER_UUID);
+
+        // Both members were added — neither should ever be reported absent.
+        assertTrue(db.isBankMember(BANK_NAME, OWNER_UUID));
+        assertTrue(db.isBankMember(BANK_NAME, OTHER_UUID));
+    }
+
+    @Test
+    void isBankMember_trueAfterReopen_whenLoadedFromDisk()
+    {
+        // Members persisted in a previous session must still be recognised by a
+        // fresh connector instance (tests the load-from-disk path).
+        db.createBankRecord(makeBank());
+        db.addBankMember(BANK_NAME, OWNER_UUID);
+        db.addBankMember(BANK_NAME, OTHER_UUID);
+
+        JsonDBConnector reopened = new JsonDBConnector(plugin);
+        assertTrue(reopened.isBankMember(BANK_NAME, OWNER_UUID));
+        assertTrue(reopened.isBankMember(BANK_NAME, OTHER_UUID));
+        reopened.close();
     }
 }

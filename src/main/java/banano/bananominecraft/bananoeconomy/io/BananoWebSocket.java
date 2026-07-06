@@ -88,6 +88,7 @@ public class BananoWebSocket
     public void shutdown()
     {
         intentionallyClosed = true;
+
         if (!client.isClosed())
         {
             client.close();
@@ -357,6 +358,7 @@ public class BananoWebSocket
         update.addProperty("action", "update");
         update.addProperty("topic", "confirmation");
         update.add("options", options);
+
         return update.toString();
     }
 

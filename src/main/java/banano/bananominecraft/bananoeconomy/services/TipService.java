@@ -46,6 +46,7 @@ public final class TipService
                                    boolean recipientOnline)
     {
         final String blockHash;
+
         try
         {
             blockHash = rpc.sendTransaction(senderWallet, recipientWallet, amount);
@@ -59,6 +60,7 @@ public final class TipService
         {
             db.saveOfflinePayment(new OfflinePaymentRecord(
                     recipientUuid, fromDisplayName, amount, blockHash, LocalDateTime.now(), message));
+
             return TransferResult.sentOffline(blockHash);
         }
 

@@ -51,6 +51,7 @@ public final class DBConnectorFactory
     private static boolean isConfigured(FileConfiguration config, String key)
     {
         String value = config.getString(key);
+
         return config.contains(key) && value != null && !value.isEmpty();
     }
 }

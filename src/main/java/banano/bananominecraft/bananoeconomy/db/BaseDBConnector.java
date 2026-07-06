@@ -1,5 +1,6 @@
 package banano.bananominecraft.bananoeconomy.db;
 
+import banano.bananominecraft.bananoeconomy.classes.BankRecord;
 import banano.bananominecraft.bananoeconomy.classes.OfflinePaymentRecord;
 import banano.bananominecraft.bananoeconomy.classes.PlayerRecord;
 import org.bukkit.OfflinePlayer;
@@ -7,14 +8,21 @@ import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class BaseDBConnector implements IDBConnector
 {
-    protected ConcurrentHashMap<UUID, PlayerRecord> playerRecords = new ConcurrentHashMap<>();
+    protected ConcurrentHashMap<UUID, PlayerRecord>       playerRecords = new ConcurrentHashMap<>();
+    protected ConcurrentHashMap<String, BankRecord>       bankRecords   = new ConcurrentHashMap<>();
+    protected ConcurrentHashMap<String, Set<String>>      bankMembers   = new ConcurrentHashMap<>();
 
     public BaseDBConnector() {}
+
+    // -------------------------------------------------------------------------
+    // Player records
+    // -------------------------------------------------------------------------
 
     @Override
     public PlayerRecord getPlayerRecord(UUID playerId)
@@ -121,8 +129,9 @@ public class BaseDBConnector implements IDBConnector
         return false;
     }
 
-    @Override
-    public void close() {}
+    // -------------------------------------------------------------------------
+    // Offline payments
+    // -------------------------------------------------------------------------
 
     @Override
     public boolean saveOfflinePayment(OfflinePaymentRecord paymentRecord)
@@ -145,6 +154,10 @@ public class BaseDBConnector implements IDBConnector
         return 0;
     }
 
+    // -------------------------------------------------------------------------
+    // Freeze queries
+    // -------------------------------------------------------------------------
+
     @Override
     public List<PlayerRecord> getFrozenPlayers()
     {
@@ -156,4 +169,71 @@ public class BaseDBConnector implements IDBConnector
     {
         return this.playerRecords.values().stream().filter(x -> !x.isFrozen()).toList();
     }
+
+    // -------------------------------------------------------------------------
+    // Bank accounts — cache-backed defaults (subclasses add persistence)
+    // -------------------------------------------------------------------------
+
+    @Override
+    public BankRecord getBankRecord(String bankName)
+    {
+        return bankRecords.getOrDefault(bankName, null);
+    }
+
+    @Override
+    public boolean createBankRecord(BankRecord bank)
+    {
+        return false;
+    }
+
+    @Override
+    public boolean bankNameExists(String bankName)
+    {
+        return bankRecords.containsKey(bankName);
+    }
+
+    @Override
+    public boolean deleteBankRecord(String bankName)
+    {
+        return false;
+    }
+
+    @Override
+    public List<String> getAllBankNames()
+    {
+        return new ArrayList<>(bankRecords.keySet());
+    }
+
+    @Override
+    public boolean isBankOwner(String bankName, String playerUuid)
+    {
+        BankRecord bank = bankRecords.get(bankName);
+        return bank != null && bank.getOwnerUuid().equals(playerUuid);
+    }
+
+    @Override
+    public boolean isBankMember(String bankName, String playerUuid)
+    {
+        Set<String> members = bankMembers.get(bankName);
+        return members != null && members.contains(playerUuid);
+    }
+
+    @Override
+    public boolean addBankMember(String bankName, String playerUuid)
+    {
+        return false;
+    }
+
+    @Override
+    public boolean removeBankMember(String bankName, String playerUuid)
+    {
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Lifecycle
+    // -------------------------------------------------------------------------
+
+    @Override
+    public void close() {}
 }

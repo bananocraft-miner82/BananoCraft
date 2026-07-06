@@ -1,5 +1,7 @@
 package banano.bananominecraft.bananoeconomy;
 
+import banano.bananominecraft.bananoeconomy.api.BananoWalletService;
+import banano.bananominecraft.bananoeconomy.api.BananoWalletServiceImpl;
 import banano.bananominecraft.bananoeconomy.classes.MessageGenerator;
 import banano.bananominecraft.bananoeconomy.commands.*;
 import banano.bananominecraft.bananoeconomy.commands.tabcompleters.*;
@@ -13,6 +15,8 @@ import banano.bananominecraft.bananoeconomy.io.BananoWebSocket;
 import banano.bananominecraft.bananoeconomy.io.EconomyFuncs;
 import banano.bananominecraft.bananoeconomy.io.RPC;
 import banano.bananominecraft.bananoeconomy.io.VaultConnector;
+import banano.bananominecraft.bananoeconomy.services.BankService;
+import banano.bananominecraft.bananoeconomy.services.RepresentativeService;
 import banano.bananominecraft.bananoeconomy.trackers.BukkitTaskTracker;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
@@ -25,9 +29,11 @@ public final class BananoEconomyMain extends JavaPlugin
     private ConfigEngine       configEngine;
     private I18n               i18n;
     private MessageGenerator   messageGenerator;
-    private RPC rpc;
-    private EconomyFuncs economyFuncs;
-    private BananoWebSocket webSocket;
+    private RPC                rpc;
+    private EconomyFuncs       economyFuncs;
+    private BankService        bankService;
+    private RepresentativeService representativeService;
+    private BananoWebSocket    webSocket;
 
     /** Tracks every async task so they can all be cancelled in onDisable. */
     private final BukkitTaskTracker taskTracker = new BukkitTaskTracker();
@@ -45,6 +51,8 @@ public final class BananoEconomyMain extends JavaPlugin
         this.messageGenerator = new MessageGenerator(this.i18n, this.configEngine);
         this.rpc            = new RPC(this, this.configEngine);
         this.economyFuncs   = new EconomyFuncs(this, this.db, this.rpc, this.configEngine);
+        this.bankService    = new BankService(this, this.configEngine, this.rpc, this.db);
+        this.representativeService = new RepresentativeService(this.rpc, this.configEngine);
         this.webSocket      = new BananoWebSocket(this, this.rpc, this.configEngine, this.messageGenerator);
 
         // --- event listeners ---
@@ -76,6 +84,9 @@ public final class BananoEconomyMain extends JavaPlugin
         getCommand("bc").setExecutor(
                 new AdminCommand(this, this.configEngine, this.economyFuncs, this.db, this.rpc,
                                  this.webSocket, this.taskTracker, this.messageGenerator));
+        getCommand("representative").setExecutor(
+                new RepresentativeCommand(this, this.economyFuncs, this.rpc, this.configEngine,
+                                          this.taskTracker, this.i18n));
 
         // --- tab completers ---
         getCommand("tip").setTabCompleter(new TipTabCompleter(this.configEngine));
@@ -83,14 +94,21 @@ public final class BananoEconomyMain extends JavaPlugin
         getCommand("deposit").setTabCompleter(new DepositTabCompleter());
         getCommand("history").setTabCompleter(new TransactionHistoryTabCompleter(this.configEngine));
         getCommand("bc").setTabCompleter(new AdminCommandTabCompleter(this.configEngine, this.db));
+        getCommand("representative").setTabCompleter(new RepresentativeTabCompleter());
 
         getLogger().info("Commands registered.");
 
         setupVault();
         getLogger().info("Economy setup complete.");
 
+        setupBananoWalletService();
+        getLogger().info("BananoWalletService registered.");
+
         setupWallet();
         getLogger().info("Wallet setup complete.");
+
+        setupBankWallet();
+        getLogger().info("Bank wallet setup complete.");
 
         this.webSocket.connect();
         getLogger().info("WebSocket connecting to " + this.configEngine.getWebsocketUrl());
@@ -125,10 +143,40 @@ public final class BananoEconomyMain extends JavaPlugin
         {
             Bukkit.getServer().getServicesManager().register(
                     Economy.class,
-                    new VaultConnector(this, this.economyFuncs, this.rpc),
+                    new VaultConnector(this, this.economyFuncs, this.rpc, this.bankService),
                     this,
                     ServicePriority.Highest);
         }
+    }
+
+    private void setupBananoWalletService()
+    {
+        Bukkit.getServer().getServicesManager().register(
+                BananoWalletService.class,
+                new BananoWalletServiceImpl(this.db, this.rpc, this.representativeService),
+                this,
+                ServicePriority.Normal);
+    }
+
+    private void setupBankWallet()
+    {
+        if (!this.configEngine.isBankSeedConfigured())
+        {
+            getLogger().info("bankWalletSeed not configured — bank accounts disabled.");
+            return;
+        }
+
+        if (!this.rpc.bankWalletExists())
+        {
+            getLogger().warning("Bank wallet not found on node — creating now.");
+            this.rpc.bankWalletCreate();
+        }
+        else
+        {
+            getLogger().info("Bank wallet verified.");
+        }
+
+        this.bankService.preloadBankBalancesAsync(this.taskTracker);
     }
 
     private void setupWallet()
