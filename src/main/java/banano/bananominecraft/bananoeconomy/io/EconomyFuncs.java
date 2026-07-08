@@ -53,6 +53,24 @@ public class EconomyFuncs
         return this.walletLocks.computeIfAbsent(wallet, key -> new ReentrantLock(true));
     }
 
+    /**
+     * Best-effort: the transfer has already succeeded regardless of whether this does. If it
+     * fails, the block is simply left pending — it will still be picked up later by the node's
+     * own auto-receive, the confirmation websocket, or a manual /receive.
+     */
+    private void tryAutoReceive(String recipientWallet, String blockHash)
+    {
+        try
+        {
+            rpc.receiveBlock(recipientWallet, blockHash);
+        }
+        catch (Exception e)
+        {
+            plugin.getLogger().log(Level.WARNING,
+                    "Failed to auto-receive block " + blockHash + " for " + recipientWallet, e);
+        }
+    }
+
     public boolean freezePlayer(Player player)
     {
         PlayerRecord playerRecord = this.db.getPlayerRecord(player);
@@ -274,7 +292,8 @@ public class EconomyFuncs
 
             try
             {
-                rpc.sendTransaction(playerRecord.getWallet(), rpc.getMasterWallet(), amount);
+                String blockHash = rpc.sendTransaction(playerRecord.getWallet(), rpc.getMasterWallet(), amount);
+                tryAutoReceive(rpc.getMasterWallet(), blockHash);
                 return true;
             }
             catch (Exception e)
@@ -306,7 +325,8 @@ public class EconomyFuncs
 
             try
             {
-                rpc.sendTransaction(sender, playerRecord.getWallet(), amount);
+                String blockHash = rpc.sendTransaction(sender, playerRecord.getWallet(), amount);
+                tryAutoReceive(playerRecord.getWallet(), blockHash);
                 return true;
             }
             catch (Exception e)
@@ -420,7 +440,8 @@ public class EconomyFuncs
             try
             {
                 String sender = playerRecord.getWallet();
-                rpc.sendTransaction(sender, rpc.getMasterWallet(), amount);
+                String blockHash = rpc.sendTransaction(sender, rpc.getMasterWallet(), amount);
+                tryAutoReceive(rpc.getMasterWallet(), blockHash);
                 return true;
             }
             catch (Exception e)
@@ -454,7 +475,8 @@ public class EconomyFuncs
             try
             {
                 String playerWallet = playerRecord.getWallet();
-                rpc.sendTransaction(sender, playerWallet, amount);
+                String blockHash = rpc.sendTransaction(sender, playerWallet, amount);
+                tryAutoReceive(playerWallet, blockHash);
                 return true;
             }
             catch (Exception e)

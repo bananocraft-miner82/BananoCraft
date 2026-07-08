@@ -47,7 +47,22 @@ class TipServiceTest
         assertEquals(TipService.TransferResult.Status.SENT_ONLINE, result.status());
         assertEquals("BLOCK", result.blockHash());
         verify(rpc).sendTransaction(SENDER, RECIPIENT, 1.5);
+        verify(rpc).receiveBlock(RECIPIENT, "BLOCK");
         verify(db, never()).saveOfflinePayment(any());
+    }
+
+    @Test
+    void onlineRecipient_stillSucceeds_whenAutoReceiveFails() throws TransactionError
+    {
+        when(rpc.sendTransaction(SENDER, RECIPIENT, 1.5)).thenReturn("BLOCK");
+        when(rpc.receiveBlock(RECIPIENT, "BLOCK")).thenThrow(new TransactionError("Block not found"));
+
+        TipService.TransferResult result = service.transfer(
+                SENDER, RECIPIENT, recipientUuid, 1.5, "thanks", "Alice", true);
+
+        // The tip itself already succeeded, so a failed auto-receive is not reported as a failure.
+        assertEquals(TipService.TransferResult.Status.SENT_ONLINE, result.status());
+        assertEquals("BLOCK", result.blockHash());
     }
 
     @Test
@@ -60,6 +75,7 @@ class TipServiceTest
 
         assertEquals(TipService.TransferResult.Status.SENT_OFFLINE, result.status());
         assertEquals("BLOCK2", result.blockHash());
+        verify(rpc).receiveBlock(RECIPIENT, "BLOCK2");
 
         ArgumentCaptor<OfflinePaymentRecord> captor = ArgumentCaptor.forClass(OfflinePaymentRecord.class);
         verify(db).saveOfflinePayment(captor.capture());
@@ -84,5 +100,6 @@ class TipServiceTest
         assertEquals("Insufficient balance", result.userError());
         assertNull(result.blockHash());
         verify(db, never()).saveOfflinePayment(any());
+        verify(rpc, never()).receiveBlock(anyString(), anyString());
     }
 }

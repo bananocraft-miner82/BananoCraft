@@ -51,6 +51,10 @@ commands:
     permission: BananoEconomy.representative
     permission-message: You do not have /<permission>
 
+  receive:
+    aliases: [rec]
+    description: Manually receives any pending incoming transactions
+
 permissions:
   BananoEconomy.nodeinfo.ip:
     description: This permission allows users to see the node IP with the nodeinfo command

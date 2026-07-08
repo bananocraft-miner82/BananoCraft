@@ -7,6 +7,8 @@ import banano.bananominecraft.bananoeconomy.io.RPC;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Framework-free core of the tip flow.
@@ -19,6 +21,8 @@ import java.util.UUID;
  */
 public final class TipService
 {
+    private static final Logger LOGGER = Logger.getLogger(TipService.class.getName());
+
     private final IDBConnector db;
     private final RPC rpc;
 
@@ -54,6 +58,19 @@ public final class TipService
         catch (final TransactionError error)
         {
             return TransferResult.failed(error.getUserError());
+        }
+
+        // Best-effort: the tip has already been sent regardless of whether this succeeds.
+        // If it fails, the block is left pending and will still be picked up later by the
+        // node's own auto-receive, the confirmation websocket, or a manual /receive.
+        try
+        {
+            rpc.receiveBlock(recipientWallet, blockHash);
+        }
+        catch (final TransactionError error)
+        {
+            LOGGER.log(Level.WARNING, "Failed to auto-receive tip block {0} for {1}: {2}",
+                    new Object[]{ blockHash, recipientWallet, error.getUserError() });
         }
 
         if (!recipientOnline)

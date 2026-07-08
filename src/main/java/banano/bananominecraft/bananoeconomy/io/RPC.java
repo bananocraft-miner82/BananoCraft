@@ -242,6 +242,113 @@ public class RPC
     }
 
     /**
+     * Returns the block hashes of not-yet-pocketed ("pending"/"receivable") sends waiting for
+     * {@code account}. Returns an empty list on any RPC/parsing failure, or when nothing is
+     * pending — the node reports an empty backlog as {@code "blocks": ""} (a bare string) rather
+     * than an empty array, so a non-array response is treated the same as "nothing pending".
+     */
+    public List<String> receivablePending(String account)
+    {
+        final JsonObject json_payload = new JsonObject();
+        json_payload.addProperty("action", "receivable");
+        json_payload.addProperty("account", account);
+        // The node excludes not-yet-confirmed ("active") blocks by default, even though block
+        // explorers typically show a send as soon as it's broadcast — without this, a deposit
+        // can be visible externally for a moment while still invisible to this call.
+        json_payload.addProperty("include_active", true);
+
+        try
+        {
+            String response = sendPost(json_payload.toString());
+            JsonObject json = JsonParser.parseString(response).getAsJsonObject();
+
+            JsonElement error = json.get("error");
+            if (error != null)
+            {
+                plugin.getLogger().warning(
+                        "Failed to retrieve receivable blocks for account " + account + ": " + error.getAsString());
+                return Collections.emptyList();
+            }
+
+            JsonElement blocksEl = json.get("blocks");
+            if (blocksEl == null || !blocksEl.isJsonArray())
+            {
+                return Collections.emptyList();
+            }
+
+            List<String> hashes = new ArrayList<>();
+            for (JsonElement element : blocksEl.getAsJsonArray())
+            {
+                hashes.add(element.getAsString());
+            }
+            return hashes;
+        }
+        catch (Exception e)
+        {
+            plugin.getLogger().log(Level.WARNING, "Failed to retrieve receivable blocks for account: " + account, e);
+        }
+
+        return Collections.emptyList();
+    }
+
+    /**
+     * Pockets a specific pending {@code blockHash} into {@code account}, signing with the main
+     * wallet.
+     *
+     * @return the resulting receive-block hash
+     */
+    public String receiveBlock(String account, String blockHash) throws TransactionError
+    {
+        return receiveBlock(getWalletID(), account, blockHash);
+    }
+
+    /**
+     * Pockets a specific pending {@code blockHash} into {@code account}, signing with the
+     * specified wallet.
+     *
+     * @return the resulting receive-block hash
+     */
+    public String receiveBlock(String walletId, String account, String blockHash) throws TransactionError
+    {
+        if (!Validator.validateAddress(account))
+        {
+            throw new TransactionError("Invalid address for account.");
+        }
+
+        final JsonObject json_payload = new JsonObject();
+
+        json_payload.addProperty("action",  "receive");
+        json_payload.addProperty("wallet",  walletId);
+        json_payload.addProperty("account", account);
+        json_payload.addProperty("block",   blockHash);
+
+        final JsonElement responseJson;
+
+        try
+        {
+            final String response = sendPost(json_payload.toString());
+            responseJson = JsonParser.parseString(response);
+        }
+        catch (final Exception e)
+        {
+            plugin.getLogger().log(Level.SEVERE, "Failed to receiveBlock.", e);
+            throw new TransactionError("Receive transaction failed");
+        }
+
+        final JsonObject json  = responseJson.getAsJsonObject();
+        final JsonElement error = json.get("error");
+        if (error != null)
+        {
+            throw new TransactionError(error.getAsString());
+        }
+
+        return Optional
+                .ofNullable(json.get("block"))
+                .map(JsonElement::getAsString)
+                .orElseThrow(() -> new TransactionError("Receive transaction resulted in missing block"));
+    }
+
+    /**
      * Returns the addresses of representatives the node currently sees as online/voting.
      * Returns an empty list (rather than throwing) on any RPC or parsing failure, since callers
      * use this as one candidate source among possibly others (e.g. an admin-curated list).

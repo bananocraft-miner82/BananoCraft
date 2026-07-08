@@ -215,6 +215,110 @@ class RPCTest
     }
 
     // -------------------------------------------------------------------------
+    // receivablePending
+    // -------------------------------------------------------------------------
+
+    @Test
+    void receivablePending_returnsHashes_onSuccess() throws Exception
+    {
+        stubResponse("{\"blocks\":[\"HASH1\",\"HASH2\"]}");
+        assertEquals(List.of("HASH1", "HASH2"), rpc.receivablePending(SENDER));
+    }
+
+    @Test
+    void receivablePending_includesActiveUnconfirmedBlocks() throws Exception
+    {
+        // Without include_active, the node excludes not-yet-confirmed blocks by default —
+        // which is exactly the case where a block explorer shows a deposit that /receive can't
+        // see yet. Assert we opt in to including them.
+        stubResponse("{\"blocks\":[\"HASH1\"]}");
+        rpc.receivablePending(SENDER);
+        verify(http).post(anyString(), contains("\"include_active\":true"));
+    }
+
+    @Test
+    void receivablePending_returnsEmpty_whenNodeReportsEmptyBacklogAsBareString() throws Exception
+    {
+        // The node reports "nothing pending" as a bare string rather than an empty array.
+        stubResponse("{\"blocks\":\"\"}");
+        assertTrue(rpc.receivablePending(SENDER).isEmpty());
+    }
+
+    @Test
+    void receivablePending_returnsEmpty_whenKeyMissing() throws Exception
+    {
+        stubResponse("{}");
+        assertTrue(rpc.receivablePending(SENDER).isEmpty());
+    }
+
+    @Test
+    void receivablePending_returnsEmpty_whenNodeReturnsError() throws Exception
+    {
+        stubResponse("{\"error\":\"Account not found\"}");
+        assertTrue(rpc.receivablePending(SENDER).isEmpty());
+    }
+
+    @Test
+    void receivablePending_returnsEmpty_onTransportFailure() throws Exception
+    {
+        stubFailure();
+        assertTrue(rpc.receivablePending(SENDER).isEmpty());
+    }
+
+    // -------------------------------------------------------------------------
+    // receiveBlock
+    // -------------------------------------------------------------------------
+
+    @Test
+    void receiveBlock_returnsBlockHash_onSuccess() throws Exception
+    {
+        stubResponse("{\"block\":\"RECEIVE123\"}");
+        assertEquals("RECEIVE123", rpc.receiveBlock("WALLET_ID", SENDER, "PENDINGHASH"));
+    }
+
+    @Test
+    void receiveBlock_twoArgOverload_usesConfiguredWalletId() throws Exception
+    {
+        stubResponse("{\"block\":\"RECEIVE123\"}");
+        assertEquals("RECEIVE123", rpc.receiveBlock(SENDER, "PENDINGHASH"));
+        verify(http).post(anyString(), contains("\"wallet\":\"WALLET_ID\""));
+    }
+
+    @Test
+    void receiveBlock_throws_whenAddressInvalid()
+    {
+        assertThrows(TransactionError.class,
+                () -> rpc.receiveBlock("WALLET_ID", "not-an-address", "PENDINGHASH"));
+    }
+
+    @Test
+    void receiveBlock_throws_onTransportFailure() throws Exception
+    {
+        stubFailure();
+        TransactionError ex = assertThrows(TransactionError.class,
+                () -> rpc.receiveBlock("WALLET_ID", SENDER, "PENDINGHASH"));
+        assertEquals("Receive transaction failed", ex.getMessage());
+    }
+
+    @Test
+    void receiveBlock_throws_whenNodeReturnsError() throws Exception
+    {
+        stubResponse("{\"error\":\"Block not found\"}");
+        TransactionError ex = assertThrows(TransactionError.class,
+                () -> rpc.receiveBlock("WALLET_ID", SENDER, "PENDINGHASH"));
+        assertEquals("Block not found", ex.getMessage());
+    }
+
+    @Test
+    void receiveBlock_throws_whenBlockMissing() throws Exception
+    {
+        stubResponse("{\"something\":\"else\"}");
+        TransactionError ex = assertThrows(TransactionError.class,
+                () -> rpc.receiveBlock("WALLET_ID", SENDER, "PENDINGHASH"));
+        assertTrue(ex.getMessage().toLowerCase().contains("missing block"));
+    }
+
+    // -------------------------------------------------------------------------
     // representativesOnline
     // -------------------------------------------------------------------------
 

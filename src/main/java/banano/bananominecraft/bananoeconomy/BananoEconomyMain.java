@@ -87,6 +87,9 @@ public final class BananoEconomyMain extends JavaPlugin
         getCommand("representative").setExecutor(
                 new RepresentativeCommand(this, this.economyFuncs, this.rpc, this.configEngine,
                                           this.taskTracker, this.i18n));
+        getCommand("receive").setExecutor(
+                new ReceiveCommand(this, this.economyFuncs, this.rpc, this.configEngine,
+                                   this.taskTracker, this.i18n));
 
         // --- tab completers ---
         getCommand("tip").setTabCompleter(new TipTabCompleter(this.configEngine));

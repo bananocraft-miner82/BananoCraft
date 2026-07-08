@@ -186,6 +186,21 @@ class EconomyFuncsTest {
         when(rpc.sendTransaction(WALLET, MASTER_WALLET, 5.0)).thenReturn("block123");
 
         assertTrue(economyFuncs.removeBalanceFP(offlinePlayer, 5.0));
+
+        verify(rpc).receiveBlock(MASTER_WALLET, "block123");
+    }
+
+    @Test
+    void removeBalanceFP_offline_stillReturnsTrue_whenAutoReceiveFails() throws Exception {
+        PlayerRecord record = new PlayerRecord(UUID.randomUUID().toString(), "Bob", WALLET, false);
+        when(db.getOfflinePlayerRecord(offlinePlayer)).thenReturn(record);
+        when(rpc.getBalance(WALLET)).thenReturn(10.0);
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+        when(rpc.sendTransaction(WALLET, MASTER_WALLET, 5.0)).thenReturn("block123");
+        when(rpc.receiveBlock(MASTER_WALLET, "block123")).thenThrow(new TransactionError("Block not found"));
+
+        // The send itself already succeeded, so a failed auto-receive is not reported as a failure.
+        assertTrue(economyFuncs.removeBalanceFP(offlinePlayer, 5.0));
     }
 
     @Test
@@ -227,6 +242,20 @@ class EconomyFuncsTest {
         PlayerRecord record = new PlayerRecord(UUID.randomUUID().toString(), "Bob", WALLET, false);
         when(db.getOfflinePlayerRecord(offlinePlayer)).thenReturn(record);
         when(rpc.sendTransaction(MASTER_WALLET, WALLET, 5.0)).thenReturn("block456");
+
+        assertTrue(economyFuncs.addBalanceTP(offlinePlayer, 5.0));
+
+        verify(rpc).receiveBlock(WALLET, "block456");
+    }
+
+    @Test
+    void addBalanceTP_offline_stillReturnsTrue_whenAutoReceiveFails() throws Exception {
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+        when(rpc.getBalance(MASTER_WALLET)).thenReturn(100.0);
+        PlayerRecord record = new PlayerRecord(UUID.randomUUID().toString(), "Bob", WALLET, false);
+        when(db.getOfflinePlayerRecord(offlinePlayer)).thenReturn(record);
+        when(rpc.sendTransaction(MASTER_WALLET, WALLET, 5.0)).thenReturn("block456");
+        when(rpc.receiveBlock(WALLET, "block456")).thenThrow(new TransactionError("Block not found"));
 
         assertTrue(economyFuncs.addBalanceTP(offlinePlayer, 5.0));
     }
@@ -332,6 +361,20 @@ class EconomyFuncsTest {
         when(rpc.sendTransaction(WALLET, MASTER_WALLET, 5.0)).thenReturn("blockABC");
 
         assertTrue(economyFuncs.removeBalanceFP(player, 5.0));
+
+        verify(rpc).receiveBlock(MASTER_WALLET, "blockABC");
+    }
+
+    @Test
+    void removeBalanceFP_player_stillReturnsTrue_whenAutoReceiveFails() throws Exception {
+        PlayerRecord record = new PlayerRecord(UUID.randomUUID().toString(), "Alice", WALLET, false);
+        when(db.getPlayerRecord(player)).thenReturn(record);
+        when(rpc.getBalance(WALLET)).thenReturn(10.0);
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+        when(rpc.sendTransaction(WALLET, MASTER_WALLET, 5.0)).thenReturn("blockABC");
+        when(rpc.receiveBlock(MASTER_WALLET, "blockABC")).thenThrow(new TransactionError("Block not found"));
+
+        assertTrue(economyFuncs.removeBalanceFP(player, 5.0));
     }
 
     @Test
@@ -384,6 +427,20 @@ class EconomyFuncsTest {
         PlayerRecord record = new PlayerRecord(UUID.randomUUID().toString(), "Alice", WALLET, false);
         when(db.getPlayerRecord(player)).thenReturn(record);
         when(rpc.sendTransaction(MASTER_WALLET, WALLET, 5.0)).thenReturn("blockDEF");
+
+        assertTrue(economyFuncs.addBalanceTP(player, 5.0));
+
+        verify(rpc).receiveBlock(WALLET, "blockDEF");
+    }
+
+    @Test
+    void addBalanceTP_player_stillReturnsTrue_whenAutoReceiveFails() throws Exception {
+        when(rpc.getMasterWallet()).thenReturn(MASTER_WALLET);
+        when(rpc.getBalance(MASTER_WALLET)).thenReturn(100.0);
+        PlayerRecord record = new PlayerRecord(UUID.randomUUID().toString(), "Alice", WALLET, false);
+        when(db.getPlayerRecord(player)).thenReturn(record);
+        when(rpc.sendTransaction(MASTER_WALLET, WALLET, 5.0)).thenReturn("blockDEF");
+        when(rpc.receiveBlock(WALLET, "blockDEF")).thenThrow(new TransactionError("Block not found"));
 
         assertTrue(economyFuncs.addBalanceTP(player, 5.0));
     }
